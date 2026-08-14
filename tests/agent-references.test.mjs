@@ -37,7 +37,8 @@ test('Codex is the runtime-verified V1 reference', async () => {
   assert.match(text, /Runtime-verified capability/);
   assert.match(text, /codex-cli 0\.133\.0/);
   assert.match(text, /\.agents\/skills\/building-agent-harness/);
-  assert.match(text, /codex exec.*--ephemeral.*--sandbox read-only/s);
+  assert.match(text, /codex -a never exec.*--ephemeral.*--sandbox read-only/s);
+  assert.doesNotMatch(text, /codex exec --ephemeral/);
 });
 
 test('Claude Code and Gemini CLI do not claim local runtime verification', async () => {

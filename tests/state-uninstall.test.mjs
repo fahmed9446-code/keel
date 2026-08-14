@@ -16,9 +16,36 @@ test('state example is deliberately tiny and contains only permitted fields', as
   assert.ok(match, 'installation contract must contain a JSON state example');
   const state = JSON.parse(match[1]);
   assert.deepEqual(Object.keys(state), ['schemaVersion', 'keelVersion', 'installedChangeIds', 'declinedOrDeferredChangeIds', 'managedArtifacts']);
+  assert.equal(state.schemaVersion, 2);
   assert.deepEqual(Object.keys(state.declinedOrDeferredChangeIds[0]), ['id', 'evidenceFingerprint', 'reason']);
-  assert.deepEqual(Object.keys(state.managedArtifacts[0]), ['path', 'createdByKeel', 'preInstallHash', 'postInstallHash']);
+  assert.deepEqual(Object.keys(state.managedArtifacts[0]), [
+    'path',
+    'createdByKeel',
+    'changeIds',
+    'preInstallHash',
+    'preInstallGitOid',
+    'postInstallHash',
+  ]);
+  assert.ok(state.managedArtifacts[0].changeIds.length > 0);
+  assert.ok(state.managedArtifacts[0].changeIds.every((id) => state.installedChangeIds.includes(id)));
   assert.doesNotMatch(contract, /auditEvidence|prompt|transcript|tokenMetrics|sourceSnippet/);
+});
+
+test('every managed path has approved ownership without cross-package overlap', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  assert.match(contract, /every managed artifact.*non-empty `changeIds`/is);
+  assert.match(contract, /every.*`changeIds`.*approved.*installedChangeIds/is);
+  assert.match(contract, /one managed-artifact record per repository-relative path/is);
+  assert.match(contract, /different (?:approved )?(?:change )?packages.*same path.*refuse/is);
+});
+
+test('automatic edits to existing files require an exact clean tracked Git preimage', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  assert.match(contract, /existing file.*Git worktree.*tracked.*clean/is);
+  assert.match(contract, /stage-zero regular blob.*preInstallGitOid/is);
+  assert.match(contract, /re-read.*blob.*exact.*current bytes/is);
+  assert.match(contract, /dirty.*untracked.*non-Git.*unreconstructible.*refuse/is);
+  assert.match(contract, /refusal.*must not create or update.*state/is);
 });
 
 test('contract requires exact approval and restrained second-run behavior', async () => {
@@ -32,12 +59,25 @@ test('contract requires exact approval and restrained second-run behavior', asyn
     contract,
     /Do not recommend tracking or committing `\.keel\/state\.json` solely because it is untracked/i,
   );
+  assert.match(contract, /evaluate installed satisfaction through.*artifact.*changeIds/is);
+  assert.match(contract, /missing.*ambiguous.*association.*do not.*re-propose.*overwrite/is);
 });
 
 test('uninstall cannot erase post-install user work', async () => {
   const contract = await readFile(contractUrl, 'utf8');
-  assert.match(contract, /current hash equals.*post-install hash/is);
+  assert.match(contract, /only.*Keel-created.*current hash equals.*post-install hash.*automatically/is);
   assert.match(contract, /do not delete/i);
   assert.match(contract, /reversal diff/i);
-  assert.match(contract, /Remove `\.keel\/state\.json` last/);
+  assert.match(contract, /existing file changed by Keel.*never.*automatically/is);
+  assert.match(contract, /retain.*state.*while.*unresolved/is);
+  assert.match(contract, /remove.*installed change ID.*only after.*every artifact.*associated.*resolved/is);
+  assert.match(contract, /Remove `\.keel\/state\.json` only after every managed artifact/is);
+});
+
+test('state v1 is read-only and migrates only through an exact provable approved package', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  assert.match(contract, /schemaVersion`?\s*1.*recognize.*read-only/is);
+  assert.match(contract, /separate.*exact.*migration.*change (?:ID|package).*approval/is);
+  assert.match(contract, /prove.*artifact.*change ID.*pre-install Git blob/is);
+  assert.match(contract, /ambiguous.*leave.*v1 state.*byte-for-byte untouched/is);
 });

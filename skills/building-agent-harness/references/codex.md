@@ -29,7 +29,7 @@ Codex supports explicit sandbox and approval settings. `--sandbox read-only` is 
 The strongest locally verified V1 procedure is a new ephemeral, read-only Codex CLI process that receives the diff, repository facts, and review question without the implementer conversation:
 
 ```bash
-codex exec --ephemeral --ignore-user-config --sandbox read-only -C /path/to/repository "Review the current change for correctness, security, regressions, and missing tests. Return findings first and do not modify files."
+codex -a never exec --ephemeral --ignore-user-config --sandbox read-only -C /path/to/repository "Review the current change for correctness, security, regressions, and missing tests. Return findings first and do not modify files."
 ```
 
 Codex also documents read-only custom subagents under `.codex/agents`, but Keel does not install one unless repository evidence justifies a reusable procedure. A subagent inherits the active sandbox unless explicitly constrained.
