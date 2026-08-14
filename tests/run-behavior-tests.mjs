@@ -284,6 +284,17 @@ function requireExactUniqueSet(actual, expected, field) {
   }
 }
 
+function requireEvidenceKinds(actual, required) {
+  for (const kind of actual) {
+    if (!universalContract.evidenceKinds.includes(kind)) {
+      throw new Error(`evidence kind is not in the universal catalog ${kind}`);
+    }
+  }
+  if (required.some((kind) => !actual.includes(kind))) {
+    throw new Error('evidence kinds do not match the scenario contract');
+  }
+}
+
 function requireTraceEntries(value, field, semanticField) {
   if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
   const ids = [];
@@ -356,7 +367,7 @@ function validateResponse(scenario, response) {
     evidenceKinds.push(item.kind);
   }
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
-  requireExactUniqueSet(evidenceKinds, scenario.requiredEvidenceKinds, 'evidence kinds');
+  requireEvidenceKinds(evidenceKinds, scenario.requiredEvidenceKinds);
   const rejectionTypes = requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
     'deliberately rejected recommendation',

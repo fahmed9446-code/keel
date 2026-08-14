@@ -188,6 +188,38 @@ test('runner accepts correct semantic behavior with different non-empty trace ID
   }
 });
 
+test('runner allows additional evidence kinds from the universal catalog', async () => {
+  const run = await runWithFake('extra-valid-evidence-first');
+  try {
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a response missing a required evidence kind', async () => {
+  const run = await runWithFake('missing-required-evidence-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: evidence kinds do not match the scenario contract$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects an evidence kind outside the universal catalog', async () => {
+  const run = await runWithFake('unknown-evidence-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: evidence kind is not in the universal catalog fabricated-evidence-kind$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
 test('runner rejects a forbidden semantic recommendation type regardless of its trace ID', async () => {
   const run = await runWithFake('wrong-semantic-type');
   try {

@@ -178,6 +178,23 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
         response.proposedChanges = [{ id: 'wrong-solo-proposal', type: 'add-ai-review' }];
       }
     }
+    if (scenarioId === 'clean-repository' && mode === 'extra-valid-evidence-first') {
+      response.evidence.push({
+        id: 'extra-valid-local-workflow',
+        kind: 'local-first-workflow',
+        detail: 'AGENTS.md directs contributors to run node --test before handoff.',
+      });
+    }
+    if (scenarioId === 'clean-repository' && mode === 'missing-required-evidence-first') {
+      response.evidence.shift();
+    }
+    if (scenarioId === 'clean-repository' && mode === 'unknown-evidence-first') {
+      response.evidence.push({
+        id: 'unknown-evidence',
+        kind: 'fabricated-evidence-kind',
+        detail: 'This semantic kind is outside the universal catalog.',
+      });
+    }
     if (scenarioId === 'clean-repository' && mode === 'hang-first') {
       process.on('SIGTERM', () => {});
       await appendFile(process.env.KEEL_FAKE_CODEX_LOG, `${JSON.stringify({
