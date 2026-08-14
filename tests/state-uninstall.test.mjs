@@ -81,3 +81,23 @@ test('state v1 is read-only and migrates only through an exact provable approved
   assert.match(contract, /prove.*artifact.*change ID.*pre-install Git blob/is);
   assert.match(contract, /ambiguous.*leave.*v1 state.*byte-for-byte untouched/is);
 });
+
+test('v1 migration treats the existing state file as a gated existing-file edit', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  const migration = contract.match(/## State v1 compatibility and migration\n([\s\S]*?)\n## Second run/);
+  assert.ok(migration, 'migration section must exist');
+  assert.match(migration[1], /`\.keel\/state\.json`.*pass.*existing-file preimage gate/is);
+  assert.match(migration[1], /state file.*dirty.*untracked.*refuse.*migration/is);
+  assert.match(migration[1], /reviewable.*preimage.*established/is);
+  assert.doesNotMatch(migration[1], /compare-and-swap|CAS exception/i);
+});
+
+test('v1 migration requires artifact-specific ownership provenance', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  const migration = contract.match(/## State v1 compatibility and migration\n([\s\S]*?)\n## Second run/);
+  assert.ok(migration, 'migration section must exist');
+  assert.match(migration[1], /artifact-specific.*independently verifiable.*path.*change-ID association/is);
+  assert.match(migration[1], /approved install record.*path.*hash/is);
+  assert.doesNotMatch(migration[1], /single installed change ID.*unambiguous/i);
+  assert.match(migration[1], /cardinality.*not provenance/i);
+});
