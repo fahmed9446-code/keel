@@ -11,14 +11,71 @@ const scenariosPath = join(projectRoot, 'tests/scenarios.json');
 const fixturesRoot = join(projectRoot, 'tests/fixtures/behavior-scenarios');
 const skillSource = join(projectRoot, 'skills/building-agent-harness');
 const codexBinary = process.env.KEEL_BEHAVIOR_CODEX_BIN || 'codex';
+const manifest = JSON.parse(await readFile(scenariosPath, 'utf8'));
+const rubricCheckIds = [
+  'repository-evidence-inspected',
+  'decision-selected',
+  'proposal-boundary-checked',
+  'rejections-recorded',
+  'communication-populated',
+];
+const communicationFields = [
+  'mainTakeaway',
+  'technicalEvidence',
+  'permanentContextCost',
+  'permanentBytes',
+  'inducedReading',
+  'facts',
+  'authorityJudgment',
+  'rejectedRecommendationsSummary',
+  'riskJustification',
+  'runtimeLimitations',
+];
+const unique = (values) => [...new Set(values)].sort();
+const universalContract = {
+  decisionValues: ['no-change', 'changes-proposed'],
+  proposalIds: unique(manifest.scenarios.flatMap((scenario) => [
+    ...scenario.allowedProposedChangeIds,
+    ...scenario.forbiddenProposedChangeIds,
+  ])),
+  rejectedRecommendationIds: unique(
+    manifest.scenarios.flatMap((scenario) => scenario.exactRejectedRecommendationIds),
+  ),
+  evidenceIds: unique(manifest.scenarios.flatMap((scenario) => scenario.requiredEvidenceIds)),
+  rubricCheckIds,
+  communicationFields,
+};
 const activeChildren = new Set();
 const activeTemporaryRoots = new Set();
 let shuttingDown = false;
 
+function waitForExit(child, timeoutMs) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      child.off('exit', finish);
+      resolve(false);
+    }, timeoutMs);
+    child.once('exit', finish);
+  });
+}
+
+async function terminateChild(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill('SIGTERM');
+  if (await waitForExit(child, 1_000)) return;
+  child.kill('SIGKILL');
+  await waitForExit(child, 1_000);
+}
+
 async function shutdown(exitCode) {
   if (shuttingDown) return;
   shuttingDown = true;
-  for (const child of activeChildren) child.kill('SIGTERM');
+  await Promise.all([...activeChildren].map(terminateChild));
   await Promise.all(
     [...activeTemporaryRoots].map((path) => rm(path, { recursive: true, force: true })),
   );
@@ -47,9 +104,10 @@ const outputSchema = {
   required: [
     'decision',
     'proposedChangeIds',
-    'rubricChecks',
+    'rubricCheckIds',
     'evidence',
     'deliberatelyRejectedRecommendations',
+    'communication',
   ],
   properties: {
     decision: { enum: ['no-change', 'changes-proposed'] },
@@ -57,68 +115,50 @@ const outputSchema = {
       type: 'array',
       items: { type: 'string' },
     },
-    rubricChecks: {
+    rubricCheckIds: {
+      type: 'array',
+      items: { type: 'string' },
+    },
+    evidence: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'passed', 'evidence'],
+        required: ['id', 'detail'],
         properties: {
           id: { type: 'string' },
-          passed: { type: 'boolean' },
-          evidence: { type: 'string' },
+          detail: { type: 'string' },
         },
       },
-    },
-    evidence: {
-      type: 'array',
-      items: { type: 'string' },
     },
     deliberatelyRejectedRecommendations: {
       type: 'array',
       items: { type: 'string' },
     },
+    communication: {
+      type: 'object',
+      additionalProperties: false,
+      required: communicationFields,
+      properties: Object.fromEntries(
+        communicationFields.map((field) => [field, { type: 'string' }]),
+      ),
+    },
   },
 };
 
-function rubricEntries(scenario) {
-  return [
-    ...scenario.mustDo.map((requirement, index) => ({
-      id: `${scenario.id}:must-do:${index + 1}`,
-      requirement,
-      meaning: 'passed means the response does this',
-    })),
-    ...scenario.mustNotDo.map((requirement, index) => ({
-      id: `${scenario.id}:must-not-do:${index + 1}`,
-      requirement,
-      meaning: 'passed means the response avoids this',
-    })),
-    ...scenario.communicationRequirements.map((requirement, index) => ({
-      id: `${scenario.id}:communication:${index + 1}`,
-      requirement,
-      meaning: 'passed means the response communicates this',
-    })),
-  ];
-}
-
-function promptFor(scenario) {
-  const rubric = rubricEntries(scenario);
+function promptFor() {
   return [
     'Use the installed building-agent-harness skill to audit this synthetic repository read-only.',
-    'This is a regression contract. Inspect repository evidence and make the smallest justified decision.',
+    'Inspect only repository evidence and make the smallest justified decision.',
     'Return only the JSON object required by the supplied output schema.',
-    'Use decision "no-change" with no proposed IDs, or "changes-proposed" with stable proposed change IDs.',
-    'Return one rubricChecks entry for every listed rubric ID. Mark passed true only when the response satisfies that requirement, and cite concise repository evidence.',
-    'For a must-not-do check, passed means the prohibited recommendation was avoided.',
-    'Keep factual evidence in evidence and keep deliberately rejected recommendations visible.',
-    'Use only allowed proposed change IDs, include every required proposed change ID, and return exactly the required rejected recommendation IDs.',
+    'Select IDs only from the universal response catalog below, based on evidence you actually find.',
+    'Include every universal rubric check ID. These IDs describe response sections, not pass/fail claims.',
+    'For communication fields that are irrelevant, return an empty string.',
+    'Keep factual evidence separate from judgments and keep deliberately rejected recommendations visible.',
     '',
-    '<scenario-contract>',
-    JSON.stringify(scenario),
-    '</scenario-contract>',
-    '<rubric>',
-    JSON.stringify(rubric),
-    '</rubric>',
+    '<universal-response-contract>',
+    JSON.stringify(universalContract),
+    '</universal-response-contract>',
   ].join('\n');
 }
 
@@ -164,6 +204,13 @@ function requireStringArray(value, field) {
   }
 }
 
+function requireExactUniqueSet(actual, expected, field) {
+  if (new Set(actual).size !== actual.length) throw new Error(`${field} must be unique`);
+  if (actual.length !== expected.length || expected.some((id) => !actual.includes(id))) {
+    throw new Error(`${field} do not match the scenario contract`);
+  }
+}
+
 function validateResponse(scenario, response) {
   if (!response || typeof response !== 'object' || Array.isArray(response)) {
     throw new Error('response must be a JSON object');
@@ -186,14 +233,16 @@ function validateResponse(scenario, response) {
     );
   }
   for (const id of response.proposedChangeIds) {
+    if (scenario.forbiddenProposedChangeIds.includes(id)) {
+      throw new Error(`proposed change ID is forbidden ${id}`);
+    }
     if (!scenario.allowedProposedChangeIds.includes(id)) {
       throw new Error(`proposed change ID is not allowed ${id}`);
     }
   }
-  for (const id of scenario.requiredProposedChangeIds) {
-    if (!response.proposedChangeIds.includes(id)) {
-      throw new Error(`required proposed change ID is missing ${id}`);
-    }
+  requireExactUniqueSet(response.proposedChangeIds, scenario.exactProposedChangeIds, 'proposed change IDs');
+  if (response.decision !== scenario.expectedDecision) {
+    throw new Error(`decision must be ${scenario.expectedDecision}`);
   }
   if (response.decision === 'no-change' && response.proposedChangeIds.length !== 0) {
     throw new Error('no-change decision cannot propose packages');
@@ -201,44 +250,43 @@ function validateResponse(scenario, response) {
   if (response.decision === 'changes-proposed' && response.proposedChangeIds.length === 0) {
     throw new Error('changes-proposed decision requires a proposed change ID');
   }
-  if (!Array.isArray(response.rubricChecks)) {
-    throw new Error('rubricChecks must be an array');
+  if (!Array.isArray(response.rubricCheckIds)) {
+    throw new Error('rubricCheckIds must be an array');
   }
-
-  const checksById = new Map();
-  for (const check of response.rubricChecks) {
-    if (!check || typeof check.id !== 'string' || checksById.has(check.id)) {
-      throw new Error('rubric check IDs must be present and unique');
-    }
-    checksById.set(check.id, check);
+  requireExactUniqueSet(response.rubricCheckIds, rubricCheckIds, 'rubric check IDs');
+  if (!Array.isArray(response.evidence) || response.evidence.length === 0) {
+    throw new Error('evidence must be a non-empty array');
   }
-  for (const { id } of rubricEntries(scenario)) {
-    const check = checksById.get(id);
-    if (!check) {
-      throw new Error(`missing rubric check ${id}`);
+  const evidenceIds = [];
+  for (const item of response.evidence) {
+    if (!item || typeof item.id !== 'string' || typeof item.detail !== 'string' || item.detail.trim() === '') {
+      throw new Error('evidence entries require an ID and detail');
     }
-    if (check.passed !== true) {
-      throw new Error(`rubric check failed ${id}`);
-    }
-    if (typeof check.evidence !== 'string' || check.evidence.trim() === '') {
-      throw new Error(`rubric check lacks evidence ${id}`);
-    }
+    evidenceIds.push(item.id);
   }
-  if (checksById.size !== rubricEntries(scenario).length) {
-    throw new Error('rubricChecks contains unknown IDs');
-  }
-
-  requireStringArray(response.evidence, 'evidence');
+  requireExactUniqueSet(evidenceIds, scenario.requiredEvidenceIds, 'evidence IDs');
   requireStringArray(
     response.deliberatelyRejectedRecommendations,
     'deliberatelyRejectedRecommendations',
   );
   const rejected = response.deliberatelyRejectedRecommendations;
-  if (
-    rejected.length !== scenario.requiredRejectedRecommendationIds.length
-    || rejected.some((id) => !scenario.requiredRejectedRecommendationIds.includes(id))
-  ) {
-    throw new Error('deliberately rejected recommendation IDs do not match the scenario contract');
+  requireExactUniqueSet(
+    rejected,
+    scenario.exactRejectedRecommendationIds,
+    'deliberately rejected recommendation IDs',
+  );
+  if (!response.communication || typeof response.communication !== 'object') {
+    throw new Error('communication must be an object');
+  }
+  for (const field of scenario.requiredCommunicationFields) {
+    if (typeof response.communication[field] !== 'string' || response.communication[field].trim() === '') {
+      throw new Error(`communication field is required ${field}`);
+    }
+  }
+  for (const [field, prefix] of Object.entries(scenario.communicationPrefixes)) {
+    if (!response.communication[field].startsWith(prefix)) {
+      throw new Error(`communication field must begin with required text ${field}`);
+    }
   }
 }
 
@@ -303,7 +351,7 @@ async function runScenario(scenario) {
         schemaPath,
         '--output-last-message',
         outputPath,
-        promptFor(scenario),
+        promptFor(),
       ],
       { cwd: repository, env: process.env, timeoutMs: 600_000 },
     );
@@ -325,7 +373,6 @@ async function runScenario(scenario) {
   }
 }
 
-const manifest = JSON.parse(await readFile(scenariosPath, 'utf8'));
 let passed = 0;
 
 for (const scenario of manifest.scenarios) {

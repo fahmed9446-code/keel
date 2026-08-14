@@ -63,10 +63,14 @@ test('scenario suite is capped at six pass-fail contracts', async () => {
     assert.ok(Array.isArray(scenario.mustNotDo) && scenario.mustNotDo.length > 0);
     assert.ok(Number.isInteger(scenario.maximumProposedChangePackages));
     assert.ok(scenario.maximumProposedChangePackages <= 5);
+    assert.ok(['no-change', 'changes-proposed'].includes(scenario.expectedDecision));
     assert.ok(Array.isArray(scenario.allowedProposedChangeIds));
-    assert.ok(Array.isArray(scenario.requiredProposedChangeIds));
-    assert.ok(scenario.requiredProposedChangeIds.every((id) => scenario.allowedProposedChangeIds.includes(id)));
-    assert.ok(Array.isArray(scenario.requiredRejectedRecommendationIds));
+    assert.ok(Array.isArray(scenario.exactProposedChangeIds));
+    assert.ok(scenario.exactProposedChangeIds.every((id) => scenario.allowedProposedChangeIds.includes(id)));
+    assert.ok(Array.isArray(scenario.forbiddenProposedChangeIds));
+    assert.ok(Array.isArray(scenario.exactRejectedRecommendationIds));
+    assert.ok(Array.isArray(scenario.requiredEvidenceIds));
+    assert.ok(Array.isArray(scenario.requiredCommunicationFields));
     assert.ok(Array.isArray(scenario.communicationRequirements));
     assert.ok(Array.isArray(scenario.requirementSources));
   }

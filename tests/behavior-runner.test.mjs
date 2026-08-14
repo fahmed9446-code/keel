@@ -120,11 +120,11 @@ test('runner rejects a response that is not structured JSON', async () => {
   }
 });
 
-test('runner requires every must-do, must-not-do, and communication rubric check', async () => {
+test('runner requires the universal structured-response rubric check IDs', async () => {
   const run = await runWithFake('missing-rubric-first');
   try {
     assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL clean-repository: missing rubric check clean-repository:must-do:1$/m);
+    assert.match(run.stdout, /^FAIL clean-repository: rubric check IDs do not match the scenario contract$/m);
     assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
     assert.equal(run.stderr, '');
   } finally {
@@ -144,11 +144,34 @@ test('runner enforces each scenario maximum proposed package count', async () =>
   }
 });
 
-test('runner rejects a forbidden recommendation even when the model marks every rubric check passed', async () => {
+test('runner keeps scenario-specific expected answers out of the Codex prompt', async () => {
+  const run = await runWithFake();
+  try {
+    assert.equal(run.exitCode, undefined, run.stderr);
+    const calls = (await readFile(run.logPath, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(calls.length, 6);
+    assert.ok(calls.every(({ promptLeaksOracle }) => promptLeaksOracle === false));
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects duplicate rejected IDs that omit a required rejection', async () => {
+  const run = await runWithFake('duplicate-rejection-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: deliberately rejected recommendation IDs must be unique$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a forbidden recommendation independently of the universal rubric checklist', async () => {
   const run = await runWithFake('forbidden-solo-proposal');
   try {
     assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL solo-local-first-with-human-review: proposed change ID is not allowed install-independent-ai-review$/m);
+    assert.match(run.stdout, /^FAIL solo-local-first-with-human-review: proposed change ID is forbidden install-independent-ai-review$/m);
     assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
   } finally {
     await cleanupRun(run);
@@ -183,6 +206,7 @@ test('runner terminates its child and removes temporary data when interrupted', 
     stdio: 'ignore',
   });
 
+  let fakePid;
   try {
     let call;
     for (let attempt = 0; attempt < 100 && !call; attempt += 1) {
@@ -193,12 +217,19 @@ test('runner terminates its child and removes temporary data when interrupted', 
       }
     }
     assert.ok(call, 'fake executable did not start');
+    fakePid = call.pid;
     child.kill('SIGTERM');
     await new Promise((resolve) => child.once('exit', resolve));
     await assert.rejects(access(call.repository));
+    assert.throws(() => process.kill(fakePid, 0), { code: 'ESRCH' });
     assert.doesNotMatch(await readFile(logPath, 'utf8'), /<scenario-contract>|Use the installed/);
   } finally {
     if (child.exitCode === null) child.kill('SIGKILL');
+    if (fakePid) {
+      try {
+        process.kill(fakePid, 'SIGKILL');
+      } catch {}
+    }
     await rm(scratch, { recursive: true, force: true });
   }
 });
