@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const skillUrl = new URL('../skills/building-agent-harness/SKILL.md', import.meta.url);
+const auditUrl = new URL('../skills/building-agent-harness/references/audit-method.md', import.meta.url);
 const scenariosUrl = new URL('./scenarios.json', import.meta.url);
 
 async function loadSkill() {
@@ -64,4 +65,13 @@ test('scenario suite is capped at six pass-fail contracts', async () => {
     assert.ok(Array.isArray(scenario.communicationRequirements));
     assert.ok(Array.isArray(scenario.requirementSources));
   }
+});
+
+test('audit method documents the optional scanner safety boundary', async () => {
+  const audit = await readFile(auditUrl, 'utf8');
+  assert.match(audit, /node scripts\/scan-repo\.mjs --root/);
+  assert.match(audit, /lexical and syntactic classification only/i);
+  assert.match(audit, /32 KiB/);
+  assert.match(audit, /--include-sensitive-paths/);
+  assert.match(audit, /registryVersion/);
 });

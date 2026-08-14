@@ -22,6 +22,10 @@ Use this skill for a repository-level coding-agent harness or context audit. Do 
 
 Never drift from audit into installation. Read [audit-method.md](references/audit-method.md) before auditing and [communication-contract.md](references/communication-contract.md) before reporting.
 
+After approval, read [installation-contract.md](references/installation-contract.md) before changing the repository. Do not load installation detail during an audit that has not reached approval.
+
+Before making runtime, capability, or native-location claims, detect the active agent and read exactly one of [codex.md](references/codex.md), [claude-code.md](references/claude-code.md), or [gemini-cli.md](references/gemini-cli.md). Read [review-method.md](references/review-method.md) or [control-plane-method.md](references/control-plane-method.md) only when that lens is materially relevant.
+
 ## Judgment rules
 
 - Separate facts from judgments. Lexical filenames, links, paths, sizes, Git status, and history patterns are evidence—not authority or policy conclusions.

@@ -6,6 +6,18 @@ Inspect repository instructions, scoped skill locations, mechanically referenced
 
 Do not read secret values. Do not infer semantic relationships from prose merely because they seem plausible.
 
+## Optional scanner
+
+From the skill directory, run:
+
+```bash
+node scripts/scan-repo.mjs --root /path/to/repository
+```
+
+The scanner performs lexical and syntactic classification only; make architectural and semantic classifications here in the skill. Check `registryVersion` before relying on known agent surfaces. Ordinary output is capped at 32 KiB and reports deterministic truncation explicitly.
+
+Sensitive-looking paths are summarized by category and tracked status. Use `--include-sensitive-paths` only for an explicit diagnostic need, keep that output out of chat when unnecessary, and never open a possible secret to inspect its value.
+
 ## Judgment pass
 
 For every candidate finding, ask:
