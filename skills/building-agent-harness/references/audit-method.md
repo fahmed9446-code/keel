@@ -16,6 +16,8 @@ node scripts/scan-repo.mjs --root /path/to/repository
 
 The scanner performs lexical and syntactic classification only; make architectural and semantic classifications here in the skill. Check `registryVersion` before relying on known agent surfaces. Ordinary output is capped at 32 KiB and reports deterministic truncation explicitly.
 
+Scanner content evidence is a Git index/blob snapshot, not current working-copy truth. Live dirty, staged, untracked, and ignored facts are path-status-only live facts; their content is not read. Use transparent native-agent live inspection when the report says it is required, and disclose the scanner's content blind spots.
+
 Sensitive-looking paths are summarized by category and tracked status. Use `--include-sensitive-paths` only for an explicit diagnostic need, keep that output out of chat when unnecessary, and never open a possible secret to inspect its value.
 
 ## Judgment pass

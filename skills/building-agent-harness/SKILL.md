@@ -35,6 +35,7 @@ Before making runtime, capability, or native-location claims, detect the active 
 - Prefer one canonical repository truth and thin agent-specific routing. Do not create independently maintained Codex, Claude, and Gemini copies of shared invariants.
 - Recommend independent technical review only when repository risk justifies it and no meaningful human or independent review already exists.
 - Treat local, hosted, solo, and team control planes as repository-specific choices—not universal maturity levels.
+- Scanner snapshot evidence must not be treated as current working-copy truth. Label any transparent native-agent live inspection separately and disclose scanner fallback or content limitations.
 
 ## Report contract
 

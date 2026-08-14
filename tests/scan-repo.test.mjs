@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
@@ -45,8 +45,119 @@ async function snapshot(root) {
   return values.sort((a, b) => a[0].localeCompare(b[0]));
 }
 
-test('reports schema 2 neutral scanner evidence', () => {
-  const { value } = runScanner(fixture);
+function initializeRepository(root) {
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+}
+
+async function snapshotFixtureRepository(prefix = 'keel-fixture-git-') {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  await copyTree(fixture, root);
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+  return root;
+}
+
+test('never invokes live filesystem directory enumeration', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-no-enumeration-root-'));
+  const marker = join(await mkdtemp(join(tmpdir(), 'keel-no-enumeration-marker-')), 'enumerated');
+  const preload = join(await mkdtemp(join(tmpdir(), 'keel-no-enumeration-preload-')), 'fail-readdir.cjs');
+  await writeFile(join(root, 'AGENTS.md'), '[snapshot](docs/snapshot.md)\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
+  await writeFile(preload, `
+const fs = require('node:fs');
+const promises = require('node:fs/promises');
+const { syncBuiltinESMExports } = require('node:module');
+function failEnumeration() {
+  fs.writeFileSync(process.env.KEEL_TEST_ENUMERATION_MARKER, 'enumerated\\n');
+  throw new Error('live directory enumeration forbidden');
+}
+fs.readdir = failEnumeration;
+fs.readdirSync = failEnumeration;
+fs.opendir = failEnumeration;
+fs.opendirSync = failEnumeration;
+promises.readdir = failEnumeration;
+promises.opendir = failEnumeration;
+syncBuiltinESMExports();
+`);
+
+  const { value } = runScanner(root, [], {
+    NODE_OPTIONS: `--require=${preload}`,
+    KEEL_TEST_ENUMERATION_MARKER: marker,
+  });
+
+  await assert.rejects(readFile(marker), { code: 'ENOENT' });
+  assert.equal(value.evidenceProvenance.snapshot.kind, 'git-index-blob-snapshot');
+});
+
+test('reads staged index content while reporting unstaged working-copy content as a blind spot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-index-content-'));
+  await writeFile(join(root, 'AGENTS.md'), '[committed](docs/committed.md)\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
+  await writeFile(join(root, 'AGENTS.md'), '[staged](docs/staged.md)\n');
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
+  await writeFile(join(root, 'AGENTS.md'), '[unstaged](docs/unstaged.md)\n');
+
+  const { value } = runScanner(root);
+
+  assert.deepEqual(value.syntacticReferences.references, [
+    { sourcePath: 'AGENTS.md', target: 'docs/staged.md', syntax: 'markdown-link' },
+  ]);
+  assert.equal(value.evidenceProvenance.snapshot.kind, 'git-index-blob-snapshot');
+  assert.equal(value.evidenceProvenance.livePathStatus.dirtyPaths, 1);
+  assert.equal(value.evidenceProvenance.livePathStatus.stagedPaths, 1);
+  assert.equal(value.contentBlindSpots.dirtyFiles, 1);
+});
+
+test('counts untracked content as a blind spot without reading or naming it', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-untracked-blind-'));
+  await writeFile(join(root, 'tracked.txt'), 'tracked\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'tracked.txt'], { cwd: root });
+  await writeFile(join(root, 'AGENTS.md'), '[untracked](docs/untracked-secret.md)\n');
+
+  const { raw, value } = runScanner(root);
+
+  assert.deepEqual(value.agentSurfaces, []);
+  assert.deepEqual(value.syntacticReferences.references, []);
+  assert.equal(value.repository.untrackedFiles, 1);
+  assert.equal(value.evidenceProvenance.livePathStatus.contentRead, false);
+  assert.equal(value.contentBlindSpots.untrackedFiles, 1);
+  assert.equal(value.contentBlindSpots.total, 1);
+  assert.equal(value.nativeLiveInspectionRequired.required, true);
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('untracked-content-not-inspected'));
+  assert.doesNotMatch(raw, /AGENTS\.md|untracked-secret/);
+});
+
+test('fails closed without enumerating or reading a non-Git repository', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-non-git-closed-'));
+  await writeFile(join(root, 'AGENTS.md'), '[private](docs/private.md)\n');
+  await writeFile(join(root, 'package.json'), '{"scripts":{"private-script":"echo private"}}\n');
+
+  const { raw, value } = runScanner(root);
+
+  assert.equal(value.repository.gitAvailable, false);
+  assert.equal(value.files.total, null);
+  assert.equal(value.files.totalBytes, null);
+  assert.deepEqual(value.files.largest, []);
+  assert.deepEqual(value.agentSurfaces, []);
+  assert.deepEqual(value.syntacticReferences, { total: 0, references: [] });
+  assert.deepEqual(value.packageScripts, []);
+  assert.equal(value.evidenceProvenance.snapshot.available, false);
+  assert.equal(value.evidenceProvenance.livePathStatus.available, false);
+  assert.equal(value.sensitiveIndicators.envFiles, null);
+  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, null);
+  assert.equal(value.nativeLiveInspectionRequired.required, true);
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('git-snapshot-unavailable'));
+  assert.ok(value.warnings.includes('Git snapshot unavailable; live filesystem content was not inspected.'));
+  assert.doesNotMatch(raw, /AGENTS\.md|private\.md|private-script/);
+});
+
+test('reports schema 2 neutral scanner evidence', async () => {
+  const root = await snapshotFixtureRepository();
+  const { value } = runScanner(root);
   assert.equal(value.schemaVersion, 2);
   assert.equal(value.registryVersion, '2026-08-14.2');
   assert.ok(value.agentSurfaces.some((item) => item.path === 'AGENTS.md' && item.agent === 'codex' && item.kind === 'instruction-file-candidate'));
@@ -62,6 +173,9 @@ test('reports schema 2 neutral scanner evidence', () => {
 test('emits neutral skill-directory candidates', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-skill-directory-'));
   await mkdir(join(root, '.agents', 'skills'), { recursive: true });
+  await writeFile(join(root, '.agents', 'skills', 'example.md'), 'snapshot candidate\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.agents/skills/example.md'], { cwd: root });
 
   const { value } = runScanner(root);
 
@@ -69,14 +183,18 @@ test('emits neutral skill-directory candidates', async () => {
   assert.ok(value.agentSurfaces.some((item) => item.path === '.agents/skills' && item.agent === 'gemini-cli' && item.kind === 'skill-directory-candidate'));
 });
 
-test('summarizes sensitive indicators without exposing paths or values by default', () => {
-  const { raw, value } = runScanner(fixture);
+test('summarizes sensitive indicators without exposing paths or values by default', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-sensitive-fixture-'));
+  await copyTree(fixture, root);
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md', 'CLAUDE.md', 'GEMINI.md', 'docs', 'package.json'], { cwd: root });
+  const { raw, value } = runScanner(root);
   assert.equal(value.sensitiveIndicators.envFiles, 1);
   assert.equal(value.sensitiveIndicators.keyLikeFiles, 1);
   assert.equal(value.sensitiveIndicators.trackedSensitiveFiles, 0);
   assert.doesNotMatch(raw, /\.env|id_rsa|synthetic-sensitive-placeholder/);
 
-  const detailed = runScanner(fixture, ['--include-sensitive-paths']).value;
+  const detailed = runScanner(root, ['--include-sensitive-paths']).value;
   assert.deepEqual(detailed.sensitiveIndicators.paths, ['.env', 'id_rsa']);
 });
 
@@ -117,6 +235,8 @@ test('resolves syntactic references from their source and accepts angle-bracket 
     '[escape](../../outside.md)',
   ].join('\n'));
   await writeFile(join(root, 'README.md'), 'root\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
 
   const { value } = runScanner(root);
   const references = value.syntacticReferences.references;
@@ -129,6 +249,8 @@ test('resolves syntactic references from their source and accepts angle-bracket 
 test('redacts sensitive syntactic-reference targets even when the target is absent', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-reference-redaction-'));
   await writeFile(join(root, 'AGENTS.md'), '[private](secrets/credentials.md)\n[public](docs/guide.md)\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
 
   const { raw, value } = runScanner(root);
 
@@ -143,6 +265,8 @@ test('skips symbolic links without exposing link or target paths', async () => {
   const target = join(await mkdtemp(join(tmpdir(), 'keel-link-target-')), 'outside-instructions.md');
   await writeFile(target, '[outside](external-secret.md)\n');
   await symlink(target, join(root, 'AGENTS.md'));
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
 
   const { raw, value } = runScanner(root);
 
@@ -153,71 +277,6 @@ test('skips symbolic links without exposing link or target paths', async () => {
   assert.doesNotMatch(raw, /AGENTS\.md|outside-instructions|external-secret/);
 });
 
-test('does not dereference a file replaced by a symbolic link during the scan', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'keel-link-race-root-'));
-  const target = join(await mkdtemp(join(tmpdir(), 'keel-link-race-target-')), 'outside.md');
-  await writeFile(join(root, 'AGENTS.md'), '[safe](docs/safe.md)\n');
-  await writeFile(target, '[outside](external-secret.md)\n');
-  const bin = await mkdtemp(join(tmpdir(), 'keel-link-race-bin-'));
-  const fakeGit = join(bin, 'git');
-  await writeFile(fakeGit, `#!/usr/bin/env node
-const { rmSync, symlinkSync } = require('node:fs');
-const { join } = require('node:path');
-const args = process.argv.slice(2);
-const rootIndex = args.indexOf('-C');
-const root = args[rootIndex + 1];
-if (args.includes('rev-parse')) {
-  rmSync(join(root, 'AGENTS.md'));
-  symlinkSync(process.env.KEEL_TEST_LINK_TARGET, join(root, 'AGENTS.md'));
-  process.stdout.write(root + '\\n');
-}
-`);
-  await chmod(fakeGit, 0o755);
-
-  const { raw, value } = runScanner(root, [], {
-    PATH: `${bin}:${process.env.PATH}`,
-    KEEL_TEST_LINK_TARGET: target,
-  });
-
-  assert.equal(value.files.skippedSymbolicLinks, 1);
-  assert.deepEqual(value.syntacticReferences.references, []);
-  assert.ok(value.warnings.includes('Skipped 1 symbolic link; symbolic links are never followed.'));
-  assert.doesNotMatch(raw, /AGENTS\.md|external-secret|outside\.md/);
-});
-
-test('does not traverse a directory replaced by an outside symbolic link during the scan', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'keel-directory-race-root-'));
-  const padding = join(root, 'a-padding');
-  const raceDirectory = join(root, 'z-race');
-  const outside = await mkdtemp(join(tmpdir(), 'keel-directory-race-outside-'));
-  await mkdir(padding);
-  await mkdir(raceDirectory);
-  for (let index = 0; index < 5_000; index += 1) {
-    await writeFile(join(padding, `padding-${String(index).padStart(4, '0')}.txt`), 'x');
-  }
-  await writeFile(join(outside, 'AGENTS.md'), '[outside](external-outside.md)\n');
-  await writeFile(join(outside, 'package.json'), '{"scripts":{"outside-package-script":"echo unsafe"}}\n');
-  const replacementScript = `
-const { renameSync, symlinkSync } = require('node:fs');
-setTimeout(() => {
-  renameSync(process.argv[1], process.argv[1] + '-original');
-  symlinkSync(process.argv[2], process.argv[1], 'dir');
-}, 75);
-`;
-  const replacer = spawn(process.execPath, ['-e', replacementScript, raceDirectory, outside], { stdio: 'ignore' });
-  const replacementDone = new Promise((resolvePromise, rejectPromise) => {
-    replacer.once('error', rejectPromise);
-    replacer.once('exit', (code) => code === 0 ? resolvePromise() : rejectPromise(new Error(`replacement exited ${code}`)));
-  });
-
-  const { raw, value } = runScanner(root, ['--max-output-bytes', String(2 * 1024 * 1024)]);
-  await replacementDone;
-
-  assert.equal(value.files.skippedSymbolicLinks, 1);
-  assert.ok(value.warnings.includes('Skipped 1 symbolic link; symbolic links are never followed.'));
-  assert.doesNotMatch(raw, /z-race|external-outside|outside-package-script/);
-});
-
 test('enforces a deterministic 32 KiB default output ceiling with explicit truncation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-large-'));
   await writeFile(join(root, 'AGENTS.md'), '# Instructions\n');
@@ -225,6 +284,8 @@ test('enforces a deterministic 32 KiB default output ceiling with explicit trunc
     const name = `document-${String(index).padStart(4, '0')}-${'x'.repeat(30)}.md`;
     await writeFile(join(root, name), `${index}\n`);
   }
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
   const first = runScanner(root);
   const second = runScanner(root);
   assert.ok(Buffer.byteLength(first.raw) <= 32 * 1024);
@@ -239,6 +300,8 @@ test('populates truncation totals while enforcing the exact 4 KiB serialized cei
   for (let index = 0; index < 250; index += 1) {
     await writeFile(join(root, `evidence-${String(index).padStart(3, '0')}-${'x'.repeat(20)}.md`), 'x\n');
   }
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
 
   const { raw, value } = runScanner(root, ['--max-output-bytes', '4096']);
 
@@ -253,6 +316,8 @@ test('uses locale-independent code-unit ordering for report paths', async () => 
   const root = await mkdtemp(join(tmpdir(), 'keel-order-'));
   await writeFile(join(root, 'Z.md'), 'same\n');
   await writeFile(join(root, 'a.md'), 'same\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
 
   const { value } = runScanner(root);
 
@@ -311,12 +376,13 @@ test('does not inherit Git metadata from a parent repository', () => {
   assert.equal(value.repository.trackedFiles, null);
   assert.equal(value.repository.untrackedFiles, null);
   assert.equal(value.repository.ignoredFiles, null);
-  assert.equal(value.sensitiveIndicators.trackedSensitiveFiles, 0);
-  assert.equal(value.sensitiveIndicators.untrackedSensitiveFiles, 0);
-  assert.equal(value.sensitiveIndicators.ignoredSensitiveFiles, 0);
-  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, 2);
+  assert.equal(value.sensitiveIndicators.trackedSensitiveFiles, null);
+  assert.equal(value.sensitiveIndicators.untrackedSensitiveFiles, null);
+  assert.equal(value.sensitiveIndicators.ignoredSensitiveFiles, null);
+  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, null);
   assert.equal(value.history.commitsInspected, 0);
-  assert.ok(value.warnings.includes('Git metadata unavailable; tracked status and history are incomplete.'));
+  assert.ok(value.warnings.includes('Git snapshot unavailable; live filesystem content was not inspected.'));
+  assert.equal(value.nativeLiveInspectionRequired.required, true);
 });
 
 test('clears inherited Git repository state before collecting evidence', async () => {
@@ -442,7 +508,7 @@ test('bounds Git evidence collection time and degrades timeout to a path-free wa
 
   assert.ok(elapsed < 3_000, `scanner took ${elapsed}ms`);
   assert.equal(value.repository.gitAvailable, false);
-  assert.ok(value.warnings.includes('Git metadata unavailable; tracked status and history are incomplete.'));
+  assert.ok(value.warnings.includes('Git snapshot unavailable; live filesystem content was not inspected.'));
   assert.doesNotMatch(raw, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
@@ -455,7 +521,7 @@ test('degrades a failed Git fact query to explicit incomplete evidence', async (
 const args = process.argv.slice(2);
 const rootIndex = args.indexOf('-C');
 if (args.includes('rev-parse')) process.stdout.write(args[rootIndex + 1] + '\\n');
-else if (args.includes('--cached')) process.exit(1);
+else if (args.includes('--stage')) process.exit(1);
 `);
   await chmod(fakeGit, 0o755);
 
@@ -463,8 +529,9 @@ else if (args.includes('--cached')) process.exit(1);
 
   assert.equal(value.repository.gitAvailable, true);
   assert.equal(value.repository.trackedFiles, null);
-  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, 1);
-  assert.ok(value.warnings.includes('Git tracked-file evidence unavailable; tracked-file facts are incomplete.'));
+  assert.equal(value.evidenceProvenance.snapshot.available, false);
+  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, 0);
+  assert.ok(value.warnings.includes('Git index snapshot unavailable; tracked paths and content are incomplete.'));
   assert.doesNotMatch(raw, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
@@ -478,7 +545,7 @@ test('degrades an invalid Git top-level response without exposing it', async () 
   const { raw, value } = runScanner(root, [], { PATH: `${bin}:${process.env.PATH}` });
 
   assert.equal(value.repository.gitAvailable, false);
-  assert.ok(value.warnings.includes('Git metadata unavailable; tracked status and history are incomplete.'));
+  assert.ok(value.warnings.includes('Git snapshot unavailable; live filesystem content was not inspected.'));
   assert.doesNotMatch(raw, /secret|credential-missing/);
 });
 

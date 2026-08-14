@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { constants as fsConstants, realpathSync } from 'node:fs';
-import { lstat, open, readdir } from 'node:fs/promises';
-import { basename, posix, relative, resolve, sep } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
 import { devNull } from 'node:os';
+import { basename, posix, resolve, sep } from 'node:path';
 import { AGENT_SURFACES, KNOWN_WORKFLOW_PATTERNS, REGISTRY_VERSION } from './agent-surfaces.mjs';
 
 const SCHEMA_VERSION = 2;
@@ -12,7 +11,8 @@ const DEFAULT_MAX_BYTES = 32 * 1024;
 const MIN_MAX_BYTES = 4 * 1024;
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 const GIT_TIMEOUT_MS = 1000;
-const SKIP_DIRECTORIES = new Set(['.git', 'node_modules']);
+const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const REGULAR_FILE_MODES = new Set(['100644', '100755']);
 
 function fail(message) {
   process.stderr.write(`scan-repo: ${message}\n`);
@@ -97,6 +97,31 @@ function isolatedGitEnvironment() {
   return environment;
 }
 
+function git(root, args, options = {}) {
+  const result = spawnSync('git', [
+    '--no-optional-locks',
+    '-c', `core.hooksPath=${devNull}`,
+    '-c', 'core.fsmonitor=false',
+    '-c', 'protocol.allow=never',
+    '-c', 'credential.interactive=never',
+    '-c', 'fetch.recurseSubmodules=false',
+    '-c', 'submodule.recurse=false',
+    '-c', 'maintenance.auto=false',
+    '-c', 'gc.auto=0',
+    '-C', root,
+    ...args,
+  ], {
+    encoding: options.encoding ?? 'utf8',
+    env: isolatedGitEnvironment(),
+    input: options.input,
+    killSignal: 'SIGKILL',
+    maxBuffer: options.maxBuffer ?? GIT_MAX_BUFFER_BYTES,
+    timeout: GIT_TIMEOUT_MS,
+  });
+  if (result.status !== 0) return null;
+  return result.stdout;
+}
+
 function sensitiveCategory(path) {
   const names = portablePath(path).split('/').filter(Boolean).reverse();
   for (const name of names) {
@@ -113,211 +138,151 @@ function sensitiveNameCategory(name) {
   return null;
 }
 
-async function walk(root) {
-  const canonicalRoot = realpathSync(root);
-  const contained = (path) => {
-    const pathFromRoot = relative(canonicalRoot, path);
-    return pathFromRoot === '' || (pathFromRoot !== '..' && !pathFromRoot.startsWith(`..${sep}`));
-  };
-  async function visit(directory, expectedIdentity) {
-    let before;
-    let canonicalDirectory;
-    try {
-      before = await lstat(directory);
-      if (before.isSymbolicLink()) return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 1 };
-      if (!before.isDirectory() || (expectedIdentity && (before.dev !== expectedIdentity.device || before.ino !== expectedIdentity.inode))) {
-        return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 0 };
-      }
-      canonicalDirectory = realpathSync(directory);
-      if (!contained(canonicalDirectory)) return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 0 };
-    } catch {
-      return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 0 };
-    }
-    const files = [];
-    const directories = new Map();
-    let skippedSymbolicLinks = 0;
-    let entries;
-    try {
-      entries = await readdir(directory, { withFileTypes: true });
-    } catch {
-      try {
-        const current = await lstat(directory);
-        if (current.isSymbolicLink()) skippedSymbolicLinks += 1;
-      } catch {
-        // The directory disappeared before it could contribute evidence.
-      }
-      return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks };
-    }
-    entries.sort((left, right) => codeUnitCompare(left.name, right.name));
-    for (const entry of entries) {
-      const absolute = resolve(directory, entry.name);
-      const path = portablePath(relative(root, absolute));
-      let info;
-      try {
-        info = await lstat(absolute);
-      } catch {
-        continue;
-      }
-      if (info.isSymbolicLink()) {
-        skippedSymbolicLinks += 1;
-      } else if (entry.name === '.git') {
-        continue;
-      } else if (info.isDirectory()) {
-        if (SKIP_DIRECTORIES.has(entry.name)) {
-          directories.set(path, { device: info.dev, inode: info.ino });
-        } else {
-          const child = await visit(absolute, { device: info.dev, inode: info.ino });
-          skippedSymbolicLinks += child.skippedSymbolicLinks;
-          if (child.valid) {
-            directories.set(path, { device: info.dev, inode: info.ino });
-            for (const file of child.files) files.push(file);
-            for (const [childPath, identity] of child.directories) directories.set(childPath, identity);
-          }
-        }
-      } else if (info.isFile()) {
-        files.push({ path, absolute, bytes: info.size, category: sensitiveCategory(path), device: info.dev, inode: info.ino });
-      }
-    }
-    try {
-      const after = await lstat(directory);
-      if (after.isSymbolicLink()) return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: skippedSymbolicLinks + 1 };
-      if (!after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino || realpathSync(directory) !== canonicalDirectory) {
-        return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks };
-      }
-    } catch {
-      return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks };
-    }
-    return { valid: true, files, directories, skippedSymbolicLinks };
-  }
-  const result = await visit(root);
-  return { files: result.files, directories: result.directories, skippedSymbolicLinks: result.skippedSymbolicLinks };
+function normalizedRepositoryPath(value) {
+  const portable = portablePath(value);
+  if (!portable || portable.startsWith('/') || /^[a-z]:\//i.test(portable)) return null;
+  const normalized = posix.normalize(portable);
+  if (normalized === '..' || normalized.startsWith('../')) return null;
+  return normalized;
 }
 
-async function retainUnchangedFiles(files, state) {
-  const retained = [];
-  for (const file of files) {
-    try {
-      const info = await lstat(file.absolute);
-      if (info.isSymbolicLink()) {
-        state.skippedSymbolicLinks += 1;
-      } else if (info.isFile() && info.dev === file.device && info.ino === file.inode) {
-        retained.push(file);
-      }
-    } catch {
-      // A removed or inaccessible entry cannot contribute evidence.
-    }
+function parseNulPaths(output) {
+  const paths = new Set();
+  for (const value of output.split('\0')) {
+    const path = normalizedRepositoryPath(value);
+    if (path) paths.add(path);
   }
-  return retained;
+  return paths;
 }
 
-async function retainUnchangedDirectories(root, directories, state) {
-  let canonicalRoot;
-  try {
-    canonicalRoot = realpathSync(root);
-  } catch {
-    throw new Error('repository changed during scan');
+function collectIndexEntries(root, warnings) {
+  const output = git(root, ['ls-files', '--stage', '-z', '--']);
+  if (output === null) {
+    warnings.push('Git index snapshot unavailable; tracked paths and content are incomplete.');
+    return null;
   }
-  const retained = new Set();
-  for (const [path, identity] of directories) {
-    const absolute = resolve(root, path);
-    try {
-      const info = await lstat(absolute);
-      if (info.isSymbolicLink()) {
-        state.skippedSymbolicLinks += 1;
-        continue;
-      }
-      const pathFromRoot = relative(canonicalRoot, realpathSync(absolute));
-      if (info.isDirectory()
-        && info.dev === identity.device
-        && info.ino === identity.inode
-        && pathFromRoot !== '..'
-        && !pathFromRoot.startsWith(`..${sep}`)) {
-        retained.add(path);
-      }
-    } catch {
-      // A removed or inaccessible entry cannot contribute evidence.
-    }
+  const entries = [];
+  for (const record of output.split('\0')) {
+    if (!record) continue;
+    const separator = record.indexOf('\t');
+    if (separator < 0) continue;
+    const metadata = record.slice(0, separator).split(' ');
+    const path = normalizedRepositoryPath(record.slice(separator + 1));
+    if (metadata.length !== 3 || !path) continue;
+    const [mode, oid, stage] = metadata;
+    entries.push({ mode, oid, stage: Number(stage), path, bytes: null });
   }
-  return retained;
+  return entries;
 }
 
-function git(root, args) {
-  const result = spawnSync('git', [
-    '--no-optional-locks',
-    '-c', `core.hooksPath=${devNull}`,
-    '-c', 'core.fsmonitor=false',
-    '-c', 'protocol.allow=never',
-    '-c', 'credential.interactive=never',
-    '-c', 'fetch.recurseSubmodules=false',
-    '-c', 'submodule.recurse=false',
-    '-c', 'maintenance.auto=false',
-    '-c', 'gc.auto=0',
-    '-C', root,
-    ...args,
-  ], {
-    encoding: 'utf8',
-    env: isolatedGitEnvironment(),
-    killSignal: 'SIGKILL',
-    maxBuffer: 8 * 1024 * 1024,
-    timeout: GIT_TIMEOUT_MS,
+function addBlobSizes(root, entries, warnings) {
+  const regular = entries.filter((entry) => entry.stage === 0 && REGULAR_FILE_MODES.has(entry.mode));
+  const oids = [...new Set(regular.map((entry) => entry.oid))];
+  if (oids.length === 0) return true;
+  const output = git(root, ['cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'], {
+    input: `${oids.join('\n')}\n`,
   });
-  if (result.status !== 0) return null;
-  return result.stdout;
+  if (output === null) {
+    warnings.push('Git blob-size evidence unavailable; tracked content metadata is incomplete.');
+    return false;
+  }
+  const sizes = new Map();
+  for (const line of output.split('\n')) {
+    const [oid, type, sizeText] = line.split(' ');
+    const size = Number(sizeText);
+    if (oid && type === 'blob' && Number.isSafeInteger(size) && size >= 0) sizes.set(oid, size);
+  }
+  for (const entry of regular) entry.bytes = sizes.get(entry.oid) ?? null;
+  if (regular.some((entry) => entry.bytes === null)) {
+    warnings.push('Some Git blob-size evidence is unavailable; tracked content metadata is incomplete.');
+    return false;
+  }
+  return true;
 }
 
-function gitEvidence(root) {
-  const topLevel = git(root, ['rev-parse', '--show-toplevel'])?.trim();
-  let ownsRepository = false;
-  try {
-    ownsRepository = Boolean(topLevel) && realpathSync(topLevel) === realpathSync(root);
-  } catch {
-    ownsRepository = false;
+function pathFact(root, args, label, warnings) {
+  const output = git(root, args);
+  if (output === null) {
+    warnings.push(`Git ${label} evidence unavailable; ${label} facts are incomplete.`);
+    return null;
   }
-  if (!ownsRepository) {
-    return {
-      available: false,
-      tracked: null,
-      untracked: null,
-      ignored: null,
-      history: { commitsInspected: 0, commitKeywordCounts: { fix: 0, revert: 0 }, fileFrequency: [] },
-      warnings: ['Git metadata unavailable; tracked status and history are incomplete.'],
-    };
+  return parseNulPaths(output);
+}
+
+function collectHistory(root, regularPaths, warnings) {
+  const head = git(root, ['rev-parse', '--verify', 'HEAD']);
+  if (head === null) {
+    return { commitsInspected: 0, commitKeywordCounts: { fix: 0, revert: 0 }, fileFrequency: [] };
   }
-  const warnings = [];
-  const pathSet = (args, label) => {
-    const output = git(root, args);
-    if (output === null) {
-      warnings.push(`Git ${label} evidence unavailable; ${label} facts are incomplete.`);
-      return null;
-    }
-    return new Set(output.split('\0').filter(Boolean).map(portablePath));
-  };
-  const tracked = pathSet(['ls-files', '-z', '--cached', '--'], 'tracked-file');
-  const untracked = pathSet(['ls-files', '-z', '--others', '--exclude-standard', '--'], 'untracked-file');
-  const ignored = pathSet(['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--'], 'ignored-file');
   const subjectOutput = git(root, ['log', '--format=%s', '--all', '--']);
   const nameOutput = git(root, ['log', '--name-only', '--format=', '--all', '--']);
-  if (subjectOutput === null || nameOutput === null) warnings.push('Git history evidence unavailable; history facts are incomplete.');
+  if (subjectOutput === null || nameOutput === null) {
+    warnings.push('Git history evidence unavailable; history facts are incomplete.');
+  }
   const subjects = (subjectOutput ?? '').split('\n').filter(Boolean);
-  const names = (nameOutput ?? '').split('\n').map((value) => value.trim()).filter(Boolean);
   const frequencies = new Map();
-  for (const name of names) frequencies.set(portablePath(name), (frequencies.get(portablePath(name)) ?? 0) + 1);
-  const fileFrequency = [...frequencies].map(([path, commits]) => ({ path, commits })).sort((left, right) => right.commits - left.commits || codeUnitCompare(left.path, right.path));
+  for (const value of (nameOutput ?? '').split('\n')) {
+    const path = normalizedRepositoryPath(value.trim());
+    if (!path || !regularPaths.has(path) || sensitiveCategory(path)) continue;
+    frequencies.set(path, (frequencies.get(path) ?? 0) + 1);
+  }
   return {
-    available: true,
+    commitsInspected: subjects.length,
+    commitKeywordCounts: {
+      fix: subjects.filter((subject) => /\bfix(?:e[ds])?\b/i.test(subject)).length,
+      revert: subjects.filter((subject) => /\brevert(?:ed|s|ing)?\b/i.test(subject)).length,
+    },
+    fileFrequency: [...frequencies]
+      .map(([path, commits]) => ({ path, commits }))
+      .sort((left, right) => right.commits - left.commits || codeUnitCompare(left.path, right.path)),
+  };
+}
+
+function collectGitEvidence(root) {
+  const topLevel = git(root, ['rev-parse', '--show-toplevel'])?.trim();
+  if (!topLevel || resolve(topLevel) !== root) return null;
+  const warnings = [];
+  const entries = collectIndexEntries(root, warnings);
+  const tracked = entries === null ? null : new Set(entries.map((entry) => entry.path));
+  const regularEntries = (entries ?? []).filter((entry) => entry.stage === 0 && REGULAR_FILE_MODES.has(entry.mode));
+  const regularPaths = new Set(regularEntries.map((entry) => entry.path));
+  const symlinkPaths = new Set((entries ?? []).filter((entry) => entry.stage === 0 && entry.mode === '120000').map((entry) => entry.path));
+  const unsupportedPaths = new Set((entries ?? []).filter((entry) => entry.stage === 0 && !REGULAR_FILE_MODES.has(entry.mode) && entry.mode !== '120000').map((entry) => entry.path));
+  const sizesAvailable = entries === null ? false : addBlobSizes(root, entries, warnings);
+  const untracked = pathFact(root, ['ls-files', '-z', '--others', '--exclude-standard', '--'], 'untracked-file', warnings);
+  const ignored = pathFact(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--'], 'ignored-file', warnings);
+  const dirty = pathFact(root, ['diff', '--name-only', '-z', '--no-ext-diff', '--no-textconv', '--'], 'dirty-file', warnings);
+  const hasHead = git(root, ['rev-parse', '--verify', 'HEAD']) !== null;
+  const staged = hasHead
+    ? pathFact(root, ['diff', '--cached', '--name-only', '-z', '--no-ext-diff', '--no-textconv', '--'], 'staged-file', warnings)
+    : tracked === null ? null : new Set(tracked);
+  return {
+    entries,
     tracked,
+    regularEntries,
+    regularPaths,
+    symlinkPaths,
+    unsupportedPaths,
+    sizesAvailable,
     untracked,
     ignored,
-    history: {
-      commitsInspected: subjects.length,
-      commitKeywordCounts: {
-        fix: subjects.filter((subject) => /\bfix(?:e[ds])?\b/i.test(subject)).length,
-        revert: subjects.filter((subject) => /\brevert(?:ed|s|ing)?\b/i.test(subject)).length,
-      },
-      fileFrequency,
-    },
+    dirty,
+    staged,
+    history: collectHistory(root, regularPaths, warnings),
     warnings,
   };
+}
+
+function inferredDirectories(files) {
+  const directories = new Set();
+  for (const file of files) {
+    let directory = posix.dirname(file.path);
+    while (directory !== '.') {
+      directories.add(directory);
+      directory = posix.dirname(directory);
+    }
+  }
+  return directories;
 }
 
 function registryMatches(files, directories) {
@@ -369,12 +334,32 @@ function extractReferences(sourcePath, text) {
   return values;
 }
 
-async function inducedReading(files, surfaces, state) {
-  const alwaysLoaded = new Set(surfaces.filter((item) => item.kind === 'instruction-file-candidate').map((item) => item.path));
+function createBlobReader(root) {
+  const cache = new Map();
+  const inspectedPaths = new Set();
+  return {
+    read(entry) {
+      if (entry.bytes === null || entry.bytes > MAX_TEXT_FILE_BYTES) return null;
+      let text = cache.get(entry.oid);
+      if (text === undefined) {
+        text = git(root, ['cat-file', 'blob', entry.oid], { maxBuffer: MAX_TEXT_FILE_BYTES + 1024 });
+        cache.set(entry.oid, text);
+      }
+      if (text !== null) inspectedPaths.add(entry.path);
+      return text;
+    },
+    inspectedCount() {
+      return inspectedPaths.size;
+    },
+  };
+}
+
+function syntacticReferences(files, surfaces, reader) {
+  const candidates = new Set(surfaces.filter((item) => item.kind === 'instruction-file-candidate').map((item) => item.path));
   const references = [];
   for (const file of files) {
-    if (!alwaysLoaded.has(file.path) || file.category || file.bytes > MAX_TEXT_FILE_BYTES) continue;
-    const text = await readTextFileWithoutFollowingLinks(file, state);
+    if (!candidates.has(file.path) || sensitiveCategory(file.path)) continue;
+    const text = reader.read(file);
     if (text === null) continue;
     references.push(...extractReferences(file.path, text));
   }
@@ -382,45 +367,24 @@ async function inducedReading(files, surfaces, state) {
   return { total: references.length, references };
 }
 
-async function readTextFileWithoutFollowingLinks(file, state) {
-  let handle;
-  try {
-    handle = await open(file.absolute, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
-  } catch (error) {
-    if (error?.code === 'ELOOP') state.skippedSymbolicLinks += 1;
-    state.invalidFiles.add(file.path);
-    return null;
-  }
-  try {
-    const info = await handle.stat();
-    if (!info.isFile() || info.dev !== file.device || info.ino !== file.inode) {
-      state.invalidFiles.add(file.path);
-      return null;
-    }
-    return await handle.readFile('utf8');
-  } catch {
-    state.invalidFiles.add(file.path);
-    return null;
-  } finally {
-    await handle.close();
-  }
-}
-
-async function packageScripts(files, state) {
-  const manifest = files.find((file) => file.path === 'package.json' && !file.category && file.bytes <= MAX_TEXT_FILE_BYTES);
+function packageScripts(files, reader) {
+  const manifest = files.find((file) => file.path === 'package.json' && !sensitiveCategory(file.path));
   if (!manifest) return [];
   try {
-    const text = await readTextFileWithoutFollowingLinks(manifest, state);
+    const text = reader.read(manifest);
     if (text === null) return [];
     const parsed = JSON.parse(text);
-    return Object.keys(parsed.scripts ?? {}).sort();
+    return Object.keys(parsed.scripts ?? {}).sort(codeUnitCompare);
   } catch {
     return [];
   }
 }
 
 function workflowFiles(files) {
-  return files.map((file) => file.path).filter((path) => KNOWN_WORKFLOW_PATTERNS.some((pattern) => pattern.endsWith('/') ? path.startsWith(pattern) : path === pattern)).sort();
+  return files
+    .map((file) => file.path)
+    .filter((path) => KNOWN_WORKFLOW_PATTERNS.some((pattern) => pattern.endsWith('/') ? path.startsWith(pattern) : path === pattern))
+    .sort(codeUnitCompare);
 }
 
 function itemCount(report) {
@@ -477,65 +441,144 @@ function enforceBudget(report, maxBytes) {
   return serialize(report);
 }
 
-async function scan(options) {
-  const root = resolve(options.root);
-  let rootInfo;
-  try {
-    rootInfo = await lstat(root);
-  } catch {
-    throw new Error('--root must identify a readable directory');
-  }
-  if (!rootInfo.isDirectory()) throw new Error('--root must identify a readable directory');
-  let walkData;
-  try {
-    walkData = await walk(root);
-  } catch {
-    throw new Error('repository traversal failed');
-  }
-  const { files: discoveredFiles, directories: discoveredDirectories, skippedSymbolicLinks } = walkData;
-  const gitData = gitEvidence(root);
-  const scanState = { skippedSymbolicLinks, invalidFiles: new Set() };
-  let files = await retainUnchangedFiles(discoveredFiles, scanState);
-  let directories = await retainUnchangedDirectories(root, discoveredDirectories, scanState);
-  gitData.history.fileFrequency = gitData.history.fileFrequency.filter((item) => !sensitiveCategory(item.path));
-  const provisionalSurfaces = registryMatches(
-    files.filter((file) => !file.category),
-    new Set([...directories].filter((path) => !sensitiveCategory(path))),
-  );
-  const syntacticReferences = await inducedReading(files, provisionalSurfaces, scanState);
-  let scripts = await packageScripts(files, scanState);
-  files = await retainUnchangedFiles(files.filter((file) => !scanState.invalidFiles.has(file.path)), scanState);
-  const retainedDirectoryIdentities = new Map([...discoveredDirectories].filter(([path]) => directories.has(path)));
-  directories = await retainUnchangedDirectories(root, retainedDirectoryIdentities, scanState);
-  const retainedPaths = new Set(files.map((file) => file.path));
-  syntacticReferences.references = syntacticReferences.references.filter((item) => retainedPaths.has(item.sourcePath));
-  syntacticReferences.total = syntacticReferences.references.length;
-  if (!retainedPaths.has('package.json')) scripts = [];
-  const agentSurfaces = registryMatches(
-    files.filter((file) => !file.category),
-    new Set([...directories].filter((path) => !sensitiveCategory(path))),
-  );
-  const sensitive = files.filter((file) => file.category);
-  const report = {
+function emptyHistory() {
+  return { commitsInspected: 0, commitKeywordCounts: { fix: 0, revert: 0 }, fileFrequency: [] };
+}
+
+function nonGitReport(rootName, options) {
+  return {
     schemaVersion: SCHEMA_VERSION,
     registryVersion: REGISTRY_VERSION,
     repository: {
-      name: sensitiveCategory(basename(root)) ? '[redacted-sensitive-path]' : basename(root),
-      gitAvailable: gitData.available,
-      trackedFiles: gitData.tracked?.size ?? null,
-      untrackedFiles: gitData.untracked?.size ?? null,
-      ignoredFiles: gitData.ignored?.size ?? null,
+      name: sensitiveCategory(rootName) ? '[redacted-sensitive-path]' : rootName,
+      gitAvailable: false,
+      trackedFiles: null,
+      untrackedFiles: null,
+      ignoredFiles: null,
+      dirtyFiles: null,
+      stagedFiles: null,
+    },
+    evidenceProvenance: {
+      snapshot: { kind: 'git-index-blob-snapshot', available: false, trackedPaths: null, contentFilesInspected: 0 },
+      livePathStatus: { kind: 'path-status-only-live-facts', available: false, contentRead: false, dirtyPaths: null, stagedPaths: null, untrackedPaths: null, ignoredPaths: null },
+    },
+    nativeLiveInspectionRequired: { required: true, reasons: ['git-snapshot-unavailable', 'live-filesystem-not-inspected'] },
+    contentBlindSpots: { dirtyFiles: null, untrackedFiles: null, ignoredFiles: null, total: null },
+    files: { total: null, totalBytes: null, skippedSymbolicLinks: 0, largest: [] },
+    agentSurfaces: [],
+    syntacticReferences: { total: 0, references: [] },
+    packageScripts: [],
+    workflows: [],
+    history: emptyHistory(),
+    sensitiveIndicators: {
+      envFiles: null,
+      keyLikeFiles: null,
+      credentialLikeFiles: null,
+      trackedSensitiveFiles: null,
+      untrackedSensitiveFiles: null,
+      ignoredSensitiveFiles: null,
+      unknownSensitiveFiles: null,
+      ...(options.includeSensitivePaths ? { paths: [] } : {}),
+    },
+    warnings: [
+      'Git snapshot unavailable; live filesystem content was not inspected.',
+      'Native live inspection is required for current repository evidence.',
+    ],
+    truncation: { truncated: false, maxOutputBytes: options.maxOutputBytes, sectionsTruncated: [], totalMatchingItems: 0, itemsReturned: 0 },
+  };
+}
+
+function factSize(value) {
+  return value === null ? null : value.size;
+}
+
+function blindSpotTotal(dirty, untracked, ignored) {
+  if (dirty === null || untracked === null || ignored === null) return null;
+  return dirty.size + untracked.size + ignored.size;
+}
+
+function buildGitReport(rootName, root, gitData, options) {
+  const regularFiles = gitData.regularEntries;
+  const visibleFiles = regularFiles.filter((file) => !sensitiveCategory(file.path));
+  const visibleDirectories = new Set([...inferredDirectories(visibleFiles)].filter((path) => !sensitiveCategory(path)));
+  const agentSurfaces = registryMatches(visibleFiles, visibleDirectories);
+  const reader = createBlobReader(root);
+  const references = syntacticReferences(visibleFiles, agentSurfaces, reader);
+  const scripts = packageScripts(visibleFiles, reader);
+  const knownPaths = new Set([
+    ...(gitData.tracked ?? []),
+    ...(gitData.untracked ?? []),
+    ...(gitData.ignored ?? []),
+  ]);
+  for (const path of gitData.symlinkPaths) knownPaths.delete(path);
+  const sensitive = [...knownPaths]
+    .map((path) => ({ path, category: sensitiveCategory(path) }))
+    .filter((item) => item.category)
+    .sort((left, right) => codeUnitCompare(left.path, right.path));
+  const pathStatusAvailable = [gitData.dirty, gitData.staged, gitData.untracked, gitData.ignored].every((value) => value !== null);
+  const snapshotAvailable = gitData.entries !== null && gitData.sizesAvailable;
+  const reasons = [];
+  if (!snapshotAvailable) reasons.push('git-evidence-incomplete');
+  if ((gitData.dirty?.size ?? 0) > 0) reasons.push('dirty-content-not-inspected');
+  if ((gitData.untracked?.size ?? 0) > 0) reasons.push('untracked-content-not-inspected');
+  if ((gitData.ignored?.size ?? 0) > 0) reasons.push('ignored-content-not-inspected');
+  if (!pathStatusAvailable) reasons.push('path-status-evidence-incomplete');
+  if (gitData.unsupportedPaths.size > 0) reasons.push('unsupported-index-entry-content');
+  const skippedSymbolicLinks = gitData.symlinkPaths.size;
+  const warnings = [
+    ...gitData.warnings,
+    ...(skippedSymbolicLinks > 0 ? [`Skipped ${skippedSymbolicLinks} symbolic ${skippedSymbolicLinks === 1 ? 'link' : 'links'}; symbolic links are never followed.`] : []),
+    ...(reasons.length > 0 ? ['Native live inspection is required for current repository evidence.'] : []),
+  ];
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    registryVersion: REGISTRY_VERSION,
+    repository: {
+      name: sensitiveCategory(rootName) ? '[redacted-sensitive-path]' : rootName,
+      gitAvailable: true,
+      trackedFiles: factSize(gitData.tracked),
+      untrackedFiles: factSize(gitData.untracked),
+      ignoredFiles: factSize(gitData.ignored),
+      dirtyFiles: factSize(gitData.dirty),
+      stagedFiles: factSize(gitData.staged),
+    },
+    evidenceProvenance: {
+      snapshot: {
+        kind: 'git-index-blob-snapshot',
+        available: snapshotAvailable,
+        trackedPaths: factSize(gitData.tracked),
+        contentFilesInspected: reader.inspectedCount(),
+      },
+      livePathStatus: {
+        kind: 'path-status-only-live-facts',
+        available: pathStatusAvailable,
+        contentRead: false,
+        dirtyPaths: factSize(gitData.dirty),
+        stagedPaths: factSize(gitData.staged),
+        untrackedPaths: factSize(gitData.untracked),
+        ignoredPaths: factSize(gitData.ignored),
+      },
+    },
+    nativeLiveInspectionRequired: { required: reasons.length > 0, reasons },
+    contentBlindSpots: {
+      dirtyFiles: factSize(gitData.dirty),
+      untrackedFiles: factSize(gitData.untracked),
+      ignoredFiles: factSize(gitData.ignored),
+      total: blindSpotTotal(gitData.dirty, gitData.untracked, gitData.ignored),
     },
     files: {
-      total: files.length,
-      totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
-      skippedSymbolicLinks: scanState.skippedSymbolicLinks,
-      largest: files.filter((file) => !file.category).map(({ path, bytes }) => ({ path, bytes })).sort((left, right) => right.bytes - left.bytes || codeUnitCompare(left.path, right.path)),
+      total: gitData.entries === null ? null : regularFiles.length,
+      totalBytes: snapshotAvailable ? regularFiles.reduce((sum, file) => sum + file.bytes, 0) : null,
+      skippedSymbolicLinks,
+      largest: visibleFiles
+        .filter((file) => file.bytes !== null)
+        .map(({ path, bytes }) => ({ path, bytes }))
+        .sort((left, right) => right.bytes - left.bytes || codeUnitCompare(left.path, right.path)),
     },
     agentSurfaces,
-    syntacticReferences,
+    syntacticReferences: references,
     packageScripts: scripts,
-    workflows: workflowFiles(files.filter((file) => !file.category)),
+    workflows: workflowFiles(visibleFiles),
     history: gitData.history,
     sensitiveIndicators: {
       envFiles: sensitive.filter((file) => file.category === 'env').length,
@@ -545,20 +588,38 @@ async function scan(options) {
       untrackedSensitiveFiles: sensitive.filter((file) => gitData.untracked?.has(file.path)).length,
       ignoredSensitiveFiles: sensitive.filter((file) => gitData.ignored?.has(file.path)).length,
       unknownSensitiveFiles: sensitive.filter((file) => !gitData.tracked?.has(file.path) && !gitData.untracked?.has(file.path) && !gitData.ignored?.has(file.path)).length,
-      ...(options.includeSensitivePaths ? { paths: sensitive.map((file) => file.path).sort() } : {}),
+      ...(options.includeSensitivePaths ? { paths: sensitive.map((file) => file.path) } : {}),
     },
-    warnings: [
-      ...gitData.warnings,
-      ...(scanState.skippedSymbolicLinks > 0 ? [`Skipped ${scanState.skippedSymbolicLinks} symbolic ${scanState.skippedSymbolicLinks === 1 ? 'link' : 'links'}; symbolic links are never followed.`] : []),
-    ],
-    truncation: {
-      truncated: false,
-      maxOutputBytes: options.maxOutputBytes,
-      sectionsTruncated: [],
-      totalMatchingItems: 0,
-      itemsReturned: 0,
-    },
+    warnings,
+    truncation: { truncated: false, maxOutputBytes: options.maxOutputBytes, sectionsTruncated: [], totalMatchingItems: 0, itemsReturned: 0 },
   };
+}
+
+async function scan(options) {
+  const suppliedRoot = resolve(options.root);
+  let rootInfo;
+  let root;
+  try {
+    rootInfo = await lstat(suppliedRoot);
+    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error('invalid root');
+    root = await realpath(suppliedRoot);
+  } catch {
+    throw new Error('--root must identify a readable directory');
+  }
+  const rootName = basename(suppliedRoot);
+  const gitData = collectGitEvidence(root);
+  let currentRoot;
+  try {
+    currentRoot = await lstat(root);
+  } catch {
+    throw new Error('repository changed during scan');
+  }
+  if (!currentRoot.isDirectory() || currentRoot.dev !== rootInfo.dev || currentRoot.ino !== rootInfo.ino) {
+    throw new Error('repository changed during scan');
+  }
+  const report = gitData === null
+    ? nonGitReport(rootName, options)
+    : buildGitReport(rootName, root, gitData, options);
   return enforceBudget(report, options.maxOutputBytes);
 }
 

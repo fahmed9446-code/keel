@@ -14,3 +14,5 @@ Each proposed package must let the human understand:
 Ask for approval beside the package list using exact IDs. Accept subsets. Do not interpret general enthusiasm, approval of the audit, or approval of one package as approval of another.
 
 Keep all serious findings visible even when only five actions are proposed. Move lower-value actions to `Later` and say that Keel deliberately limited the change set.
+
+Label scanner snapshot evidence separately from transparent native-agent live inspection. Disclose scanner fallback, incomplete evidence, and content blind spots in the limitations section.

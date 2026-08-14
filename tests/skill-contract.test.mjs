@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const skillUrl = new URL('../skills/building-agent-harness/SKILL.md', import.meta.url);
 const auditUrl = new URL('../skills/building-agent-harness/references/audit-method.md', import.meta.url);
+const communicationUrl = new URL('../skills/building-agent-harness/references/communication-contract.md', import.meta.url);
 const scenariosUrl = new URL('./scenarios.json', import.meta.url);
 
 async function loadSkill() {
@@ -74,4 +75,19 @@ test('audit method documents the optional scanner safety boundary', async () => 
   assert.match(audit, /32 KiB/);
   assert.match(audit, /--include-sensitive-paths/);
   assert.match(audit, /registryVersion/);
+});
+
+test('audit reports separate snapshot evidence from native live inspection and discloses blind spots', async () => {
+  const [skill, audit, communication] = await Promise.all([
+    loadSkill(),
+    readFile(auditUrl, 'utf8'),
+    readFile(communicationUrl, 'utf8'),
+  ]);
+
+  assert.match(audit, /Git index\/blob snapshot/i);
+  assert.match(audit, /path-status-only live facts/i);
+  assert.match(skill, /must not be treated as current working-copy truth/i);
+  assert.match(skill, /transparent native-agent live inspection/i);
+  assert.match(communication, /label scanner snapshot evidence separately from transparent native-agent live inspection/i);
+  assert.match(communication, /content blind spots/i);
 });
