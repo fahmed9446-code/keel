@@ -1,0 +1,14 @@
+{
+  "name": "keel-agent-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build fast. Stay on course.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "Apache-2.0"
+}
