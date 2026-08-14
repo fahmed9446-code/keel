@@ -28,6 +28,10 @@ test('contract requires exact approval and restrained second-run behavior', asyn
   assert.match(contract, /same evidence fingerprint.*do not propose it again/is);
   assert.match(contract, /materially changed.*resurface/is);
   assert.match(contract, /No installation.*no state file/is);
+  assert.match(
+    contract,
+    /Do not recommend tracking or committing `\.keel\/state\.json` solely because it is untracked/i,
+  );
 });
 
 test('uninstall cannot erase post-install user work', async () => {

@@ -52,6 +52,7 @@ Keep paths repository-relative. Fingerprint only the normalized facts relevant t
 - If relevant evidence materially changed, reassess and resurface the recommendation only when the new facts justify it; explain what changed.
 - If a managed artifact drifted after installation, report the drift without overwriting it.
 - Recognize Keel-managed files as installed state, not new repository sprawl.
+- Do not recommend tracking or committing `.keel/state.json` solely because it is untracked. Version-control policy is a repository and human decision; recommend shared state only when explicit repository evidence requires Keel decisions to persist across clones.
 
 ## Uninstall
 
