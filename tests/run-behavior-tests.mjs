@@ -45,9 +45,15 @@ const universalContract = {
   rubricCheckIds,
   communicationFields,
 };
-const activeChildren = new Set();
+const activeChildren = new Map();
 const activeTemporaryRoots = new Set();
+const retainedTemporaryRoots = new Set();
+const activeScenarioTasks = new Set();
 let shuttingDown = false;
+
+function requireRunning() {
+  if (shuttingDown) throw new Error('shutdown in progress');
+}
 
 function waitForExit(child, timeoutMs) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
@@ -64,21 +70,70 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-async function terminateChild(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+async function terminateChild(child, temporaryRoot) {
+  if (child.exitCode !== null || child.signalCode !== null) return true;
   child.kill('SIGTERM');
-  if (await waitForExit(child, 1_000)) return;
+  if (await waitForExit(child, 1_000)) return true;
+  const forceUnconfirmed = process.env.KEEL_BEHAVIOR_TEST_FORCE_UNCONFIRMED_EXIT === '1';
+  if (forceUnconfirmed && temporaryRoot) retainedTemporaryRoots.add(temporaryRoot);
   child.kill('SIGKILL');
-  await waitForExit(child, 1_000);
+  const confirmed = await waitForExit(child, 1_000);
+  if ((!confirmed || forceUnconfirmed) && temporaryRoot) {
+    retainedTemporaryRoots.add(temporaryRoot);
+  }
+  return confirmed && !forceUnconfirmed;
 }
 
 async function shutdown(exitCode) {
   if (shuttingDown) return;
   shuttingDown = true;
-  await Promise.all([...activeChildren].map(terminateChild));
-  await Promise.all(
-    [...activeTemporaryRoots].map((path) => rm(path, { recursive: true, force: true })),
-  );
+  if (process.env.KEEL_BEHAVIOR_TEST_POST_SHUTDOWN_SPAWN_MARKER) {
+    try {
+      await run(
+        process.execPath,
+        [
+          '-e',
+          'require("node:fs").writeFileSync(process.argv[1], "spawned")',
+          process.env.KEEL_BEHAVIOR_TEST_POST_SHUTDOWN_SPAWN_MARKER,
+        ],
+        { timeoutMs: 1_000 },
+      );
+    } catch {}
+  }
+  const processed = new Set();
+  let childExitUnconfirmed = false;
+  while (true) {
+    const pending = [...activeChildren.entries()].filter(([child]) => !processed.has(child));
+    if (pending.length === 0) break;
+    for (const [child] of pending) processed.add(child);
+    const results = await Promise.all(
+      pending.map(([child, { temporaryRoot }]) => terminateChild(child, temporaryRoot)),
+    );
+    if (results.some((confirmed) => confirmed === false)) childExitUnconfirmed = true;
+  }
+
+  await Promise.race([
+    Promise.allSettled([...activeScenarioTasks]),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]);
+
+  let cleanupFailed = false;
+  for (const path of activeTemporaryRoots) {
+    if (retainedTemporaryRoots.has(path)) continue;
+    try {
+      await rm(path, { recursive: true, force: true });
+    } catch {
+      cleanupFailed = true;
+    }
+  }
+  if (childExitUnconfirmed) {
+    console.log('FAIL cleanup: child exit unconfirmed; temporary data retained');
+    process.exit(1);
+  }
+  if (cleanupFailed) {
+    console.log('FAIL cleanup: temporary data removal failed');
+    process.exit(1);
+  }
   process.exit(exitCode);
 }
 
@@ -171,9 +226,10 @@ async function copyDirectoryContents(source, destination) {
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const { timeoutMs, ...spawnOptions } = options;
+    requireRunning();
+    const { timeoutMs, temporaryRoot, ...spawnOptions } = options;
     const child = spawn(command, args, { ...spawnOptions, stdio: 'ignore' });
-    activeChildren.add(child);
+    activeChildren.set(child, { temporaryRoot });
     let timedOut = false;
     let forceTimer;
     const timer = timeoutMs
@@ -291,6 +347,7 @@ function validateResponse(scenario, response) {
 }
 
 async function runScenario(scenario) {
+  requireRunning();
   const temporaryRoot = await mkdtemp(join(tmpdir(), `keel-behavior-${scenario.id}-`));
   activeTemporaryRoots.add(temporaryRoot);
   const repository = join(temporaryRoot, 'repository');
@@ -300,10 +357,12 @@ async function runScenario(scenario) {
   try {
     await copyDirectoryContents(join(fixturesRoot, scenario.id), repository);
     const gitEnvironment = isolatedGitEnvironment();
+    requireRunning();
     const gitResult = await run('git', ['init', '--quiet', '--template='], {
       cwd: repository,
       env: gitEnvironment,
       timeoutMs: 10_000,
+      temporaryRoot,
     });
     if (gitResult.code !== 0) {
       throw new Error('could not initialize temporary repository');
@@ -326,15 +385,18 @@ async function runScenario(scenario) {
         'Synthetic behavior fixture',
       ],
     ]) {
+      requireRunning();
       const gitSetup = await run('git', args, {
         cwd: repository,
         env: gitEnvironment,
         timeoutMs: 10_000,
+        temporaryRoot,
       });
       if (gitSetup.code !== 0) throw new Error('could not prepare temporary repository');
     }
     await writeFile(schemaPath, `${JSON.stringify(outputSchema)}\n`);
 
+    requireRunning();
     const result = await run(
       codexBinary,
       [
@@ -353,7 +415,7 @@ async function runScenario(scenario) {
         outputPath,
         promptFor(),
       ],
-      { cwd: repository, env: process.env, timeoutMs: 600_000 },
+      { cwd: repository, env: process.env, timeoutMs: 600_000, temporaryRoot },
     );
     if (result.timedOut) throw new Error('codex timed out');
     if (result.code !== 0) {
@@ -368,23 +430,32 @@ async function runScenario(scenario) {
     }
     validateResponse(scenario, response);
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
-    activeTemporaryRoots.delete(temporaryRoot);
+    if (!retainedTemporaryRoots.has(temporaryRoot)) {
+      await rm(temporaryRoot, { recursive: true, force: true });
+      activeTemporaryRoots.delete(temporaryRoot);
+    }
   }
 }
 
 let passed = 0;
 
 for (const scenario of manifest.scenarios) {
+  if (shuttingDown) break;
+  const scenarioTask = runScenario(scenario);
+  activeScenarioTasks.add(scenarioTask);
   try {
-    await runScenario(scenario);
+    await scenarioTask;
     passed += 1;
     console.log(`PASS ${scenario.id}`);
   } catch (error) {
-    console.log(`FAIL ${scenario.id}: ${error.message}`);
+    if (!shuttingDown) console.log(`FAIL ${scenario.id}: ${error.message}`);
+  } finally {
+    activeScenarioTasks.delete(scenarioTask);
   }
 }
 
-const allPassed = passed === manifest.scenarios.length;
-console.log(`${allPassed ? 'PASS' : 'FAIL'} ${passed}/${manifest.scenarios.length} behavior scenarios`);
-if (!allPassed) process.exitCode = 1;
+if (!shuttingDown) {
+  const allPassed = passed === manifest.scenarios.length;
+  console.log(`${allPassed ? 'PASS' : 'FAIL'} ${passed}/${manifest.scenarios.length} behavior scenarios`);
+  if (!allPassed) process.exitCode = 1;
+}

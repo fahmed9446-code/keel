@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile, spawn } from 'node:child_process';
@@ -230,6 +230,81 @@ test('runner terminates its child and removes temporary data when interrupted', 
         process.kill(fakePid, 'SIGKILL');
       } catch {}
     }
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('runner refuses a subprocess spawn attempted after shutdown starts', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'keel-behavior-spawn-gate-test-'));
+  const logPath = join(scratch, 'calls.jsonl');
+  const markerPath = join(scratch, 'spawned-after-shutdown');
+  const child = spawn(process.execPath, [runnerPath], {
+    cwd: rootPath,
+    env: {
+      ...process.env,
+      KEEL_BEHAVIOR_CODEX_BIN: fakeCodexPath,
+      KEEL_FAKE_CODEX_LOG: logPath,
+      KEEL_FAKE_CODEX_MODE: 'hang-first',
+      KEEL_BEHAVIOR_TEST_POST_SHUTDOWN_SPAWN_MARKER: markerPath,
+    },
+    stdio: 'ignore',
+  });
+  let fakePid;
+  try {
+    let call;
+    for (let attempt = 0; attempt < 100 && !call; attempt += 1) {
+      try { call = JSON.parse((await readFile(logPath, 'utf8')).trim().split('\n')[0]); }
+      catch { await new Promise((resolve) => setTimeout(resolve, 20)); }
+    }
+    assert.ok(call, 'fake executable did not start');
+    fakePid = call.pid;
+    child.kill('SIGTERM');
+    await new Promise((resolve) => child.once('exit', resolve));
+    await assert.rejects(access(markerPath));
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    if (fakePid) { try { process.kill(fakePid, 'SIGKILL'); } catch {} }
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test('runner retains temporary data and reports failure when forced exit is unconfirmed', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'keel-behavior-unconfirmed-exit-test-'));
+  const logPath = join(scratch, 'calls.jsonl');
+  const child = spawn(process.execPath, [runnerPath], {
+    cwd: rootPath,
+    env: {
+      ...process.env,
+      KEEL_BEHAVIOR_CODEX_BIN: fakeCodexPath,
+      KEEL_FAKE_CODEX_LOG: logPath,
+      KEEL_FAKE_CODEX_MODE: 'hang-first',
+      KEEL_BEHAVIOR_TEST_FORCE_UNCONFIRMED_EXIT: '1',
+    },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let fakePid;
+  let repository;
+  let stdout = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => { stdout += chunk; });
+  try {
+    let call;
+    for (let attempt = 0; attempt < 100 && !call; attempt += 1) {
+      try { call = JSON.parse((await readFile(logPath, 'utf8')).trim().split('\n')[0]); }
+      catch { await new Promise((resolve) => setTimeout(resolve, 20)); }
+    }
+    assert.ok(call, 'fake executable did not start');
+    fakePid = call.pid;
+    repository = call.repository;
+    child.kill('SIGTERM');
+    const [exitCode] = await new Promise((resolve) => child.once('exit', (...values) => resolve(values)));
+    assert.equal(exitCode, 1);
+    assert.equal(stdout, 'FAIL cleanup: child exit unconfirmed; temporary data retained\n');
+    await access(repository);
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    if (fakePid) { try { process.kill(fakePid, 'SIGKILL'); } catch {} }
+    if (repository) await rm(dirname(repository), { recursive: true, force: true });
     await rm(scratch, { recursive: true, force: true });
   }
 });
