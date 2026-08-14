@@ -209,14 +209,29 @@ function pathFact(root, args, label, warnings) {
   return parseNulPaths(output);
 }
 
+function collectHeadState(root, warnings) {
+  const output = git(root, [
+    'status',
+    '--porcelain=v2',
+    '--branch',
+    '-z',
+    '--untracked-files=no',
+    '--ignore-submodules=all',
+    '--',
+  ]);
+  const oidRecord = output?.split('\0').find((record) => record.startsWith('# branch.oid '));
+  const oid = oidRecord?.slice('# branch.oid '.length);
+  if (oid === '(initial)') return 'unborn';
+  if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(oid ?? '')) return 'present';
+  warnings.push('Git HEAD-state evidence unavailable; HEAD state is incomplete.');
+  return null;
+}
+
 function collectHistory(root, regularPaths, warnings) {
-  const head = git(root, ['rev-parse', '--verify', 'HEAD']);
-  if (head === null) {
-    return { commitsInspected: 0, commitKeywordCounts: { fix: 0, revert: 0 }, fileFrequency: [] };
-  }
   const subjectOutput = git(root, ['log', '--format=%s', '--all', '--']);
   const nameOutput = git(root, ['log', '--name-only', '--format=', '--all', '--']);
-  if (subjectOutput === null || nameOutput === null) {
+  const available = subjectOutput !== null && nameOutput !== null;
+  if (!available) {
     warnings.push('Git history evidence unavailable; history facts are incomplete.');
   }
   const subjects = (subjectOutput ?? '').split('\n').filter(Boolean);
@@ -227,14 +242,17 @@ function collectHistory(root, regularPaths, warnings) {
     frequencies.set(path, (frequencies.get(path) ?? 0) + 1);
   }
   return {
-    commitsInspected: subjects.length,
-    commitKeywordCounts: {
-      fix: subjects.filter((subject) => /\bfix(?:e[ds])?\b/i.test(subject)).length,
-      revert: subjects.filter((subject) => /\brevert(?:ed|s|ing)?\b/i.test(subject)).length,
+    available,
+    value: {
+      commitsInspected: subjects.length,
+      commitKeywordCounts: {
+        fix: subjects.filter((subject) => /\bfix(?:e[ds])?\b/i.test(subject)).length,
+        revert: subjects.filter((subject) => /\brevert(?:ed|s|ing)?\b/i.test(subject)).length,
+      },
+      fileFrequency: [...frequencies]
+        .map(([path, commits]) => ({ path, commits }))
+        .sort((left, right) => right.commits - left.commits || codeUnitCompare(left.path, right.path)),
     },
-    fileFrequency: [...frequencies]
-      .map(([path, commits]) => ({ path, commits }))
-      .sort((left, right) => right.commits - left.commits || codeUnitCompare(left.path, right.path)),
   };
 }
 
@@ -252,10 +270,9 @@ function collectGitEvidence(root) {
   const untracked = pathFact(root, ['ls-files', '-z', '--others', '--exclude-standard', '--'], 'untracked-file', warnings);
   const ignored = pathFact(root, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--'], 'ignored-file', warnings);
   const dirty = pathFact(root, ['diff', '--name-only', '-z', '--no-ext-diff', '--no-textconv', '--'], 'dirty-file', warnings);
-  const hasHead = git(root, ['rev-parse', '--verify', 'HEAD']) !== null;
-  const staged = hasHead
-    ? pathFact(root, ['diff', '--cached', '--name-only', '-z', '--no-ext-diff', '--no-textconv', '--'], 'staged-file', warnings)
-    : tracked === null ? null : new Set(tracked);
+  const headState = collectHeadState(root, warnings);
+  const staged = pathFact(root, ['diff', '--cached', '--name-only', '-z', '--no-ext-diff', '--no-textconv', '--'], 'staged-file', warnings);
+  const history = collectHistory(root, regularPaths, warnings);
   return {
     entries,
     tracked,
@@ -268,7 +285,9 @@ function collectGitEvidence(root) {
     ignored,
     dirty,
     staged,
-    history: collectHistory(root, regularPaths, warnings),
+    headState,
+    history: history.value,
+    historyAvailable: history.available,
     warnings,
   };
 }
@@ -337,19 +356,32 @@ function extractReferences(sourcePath, text) {
 function createBlobReader(root) {
   const cache = new Map();
   const inspectedPaths = new Set();
+  const skippedPaths = new Set();
+  const limitSkippedPaths = new Set();
+  const failedPaths = new Set();
   return {
     read(entry) {
-      if (entry.bytes === null || entry.bytes > MAX_TEXT_FILE_BYTES) return null;
-      let text = cache.get(entry.oid);
-      if (text === undefined) {
-        text = git(root, ['cat-file', 'blob', entry.oid], { maxBuffer: MAX_TEXT_FILE_BYTES + 1024 });
-        cache.set(entry.oid, text);
+      if (entry.bytes === null || entry.bytes > MAX_TEXT_FILE_BYTES) {
+        skippedPaths.add(entry.path);
+        if (entry.bytes !== null) limitSkippedPaths.add(entry.path);
+        return null;
       }
-      if (text !== null) inspectedPaths.add(entry.path);
-      return text;
+      let result = cache.get(entry.oid);
+      if (result === undefined) {
+        result = { text: git(root, ['cat-file', 'blob', entry.oid], { maxBuffer: MAX_TEXT_FILE_BYTES + 1024 }) };
+        cache.set(entry.oid, result);
+      }
+      if (result.text === null) failedPaths.add(entry.path);
+      else inspectedPaths.add(entry.path);
+      return result.text;
     },
-    inspectedCount() {
-      return inspectedPaths.size;
+    stats() {
+      return {
+        inspected: inspectedPaths.size,
+        skipped: skippedPaths.size,
+        limitSkipped: limitSkippedPaths.size,
+        failed: failedPaths.size,
+      };
     },
   };
 }
@@ -459,8 +491,24 @@ function nonGitReport(rootName, options) {
       stagedFiles: null,
     },
     evidenceProvenance: {
-      snapshot: { kind: 'git-index-blob-snapshot', available: false, trackedPaths: null, contentFilesInspected: 0 },
-      livePathStatus: { kind: 'path-status-only-live-facts', available: false, contentRead: false, dirtyPaths: null, stagedPaths: null, untrackedPaths: null, ignoredPaths: null },
+      snapshot: {
+        kind: 'git-index-blob-snapshot',
+        available: false,
+        trackedPaths: null,
+        contentFilesInspected: 0,
+        contentFilesSkipped: 0,
+        contentFilesFailed: 0,
+      },
+      livePathStatus: {
+        kind: 'path-status-only-live-facts',
+        available: false,
+        contentRead: false,
+        headState: null,
+        dirtyPaths: null,
+        stagedPaths: null,
+        untrackedPaths: null,
+        ignoredPaths: null,
+      },
     },
     nativeLiveInspectionRequired: { required: true, reasons: ['git-snapshot-unavailable', 'live-filesystem-not-inspected'] },
     contentBlindSpots: { dirtyFiles: null, untrackedFiles: null, ignoredFiles: null, total: null },
@@ -505,6 +553,7 @@ function buildGitReport(rootName, root, gitData, options) {
   const reader = createBlobReader(root);
   const references = syntacticReferences(visibleFiles, agentSurfaces, reader);
   const scripts = packageScripts(visibleFiles, reader);
+  const readerStats = reader.stats();
   const knownPaths = new Set([
     ...(gitData.tracked ?? []),
     ...(gitData.untracked ?? []),
@@ -515,7 +564,9 @@ function buildGitReport(rootName, root, gitData, options) {
     .map((path) => ({ path, category: sensitiveCategory(path) }))
     .filter((item) => item.category)
     .sort((left, right) => codeUnitCompare(left.path, right.path));
-  const pathStatusAvailable = [gitData.dirty, gitData.staged, gitData.untracked, gitData.ignored].every((value) => value !== null);
+  const sensitivePathUniverseAvailable = [gitData.tracked, gitData.untracked, gitData.ignored].every((value) => value !== null);
+  const pathStatusAvailable = gitData.headState !== null
+    && [gitData.dirty, gitData.staged, gitData.untracked, gitData.ignored].every((value) => value !== null);
   const snapshotAvailable = gitData.entries !== null && gitData.sizesAvailable;
   const reasons = [];
   if (!snapshotAvailable) reasons.push('git-evidence-incomplete');
@@ -523,13 +574,29 @@ function buildGitReport(rootName, root, gitData, options) {
   if ((gitData.untracked?.size ?? 0) > 0) reasons.push('untracked-content-not-inspected');
   if ((gitData.ignored?.size ?? 0) > 0) reasons.push('ignored-content-not-inspected');
   if (!pathStatusAvailable) reasons.push('path-status-evidence-incomplete');
+  if (gitData.dirty === null) reasons.push('dirty-path-status-evidence-incomplete');
+  if (gitData.staged === null) reasons.push('staged-path-status-evidence-incomplete');
+  if (gitData.untracked === null) reasons.push('untracked-path-status-evidence-incomplete');
+  if (gitData.ignored === null) reasons.push('ignored-path-status-evidence-incomplete');
+  if (gitData.headState === null) reasons.push('head-state-evidence-incomplete');
+  if (!gitData.historyAvailable) reasons.push('history-evidence-incomplete');
   if (gitData.unsupportedPaths.size > 0) reasons.push('unsupported-index-entry-content');
+  if (readerStats.limitSkipped > 0) reasons.push('snapshot-content-limit-exceeded');
+  if (readerStats.failed > 0) reasons.push('snapshot-content-read-failed');
   const skippedSymbolicLinks = gitData.symlinkPaths.size;
   const warnings = [
     ...gitData.warnings,
     ...(skippedSymbolicLinks > 0 ? [`Skipped ${skippedSymbolicLinks} symbolic ${skippedSymbolicLinks === 1 ? 'link' : 'links'}; symbolic links are never followed.`] : []),
+    ...(readerStats.limitSkipped > 0 ? ['Some snapshot content candidates exceeded the inspection limit; content evidence is incomplete.'] : []),
+    ...(readerStats.failed > 0 ? ['Some snapshot content candidates could not be read from Git objects; content evidence is incomplete.'] : []),
     ...(reasons.length > 0 ? ['Native live inspection is required for current repository evidence.'] : []),
   ];
+  const categoryCount = (category) => sensitivePathUniverseAvailable
+    ? sensitive.filter((file) => file.category === category).length
+    : null;
+  const factCount = (fact) => fact === null
+    ? null
+    : sensitive.filter((file) => fact.has(file.path)).length;
   return {
     schemaVersion: SCHEMA_VERSION,
     registryVersion: REGISTRY_VERSION,
@@ -547,12 +614,15 @@ function buildGitReport(rootName, root, gitData, options) {
         kind: 'git-index-blob-snapshot',
         available: snapshotAvailable,
         trackedPaths: factSize(gitData.tracked),
-        contentFilesInspected: reader.inspectedCount(),
+        contentFilesInspected: readerStats.inspected,
+        contentFilesSkipped: readerStats.skipped,
+        contentFilesFailed: readerStats.failed,
       },
       livePathStatus: {
         kind: 'path-status-only-live-facts',
         available: pathStatusAvailable,
         contentRead: false,
+        headState: gitData.headState,
         dirtyPaths: factSize(gitData.dirty),
         stagedPaths: factSize(gitData.staged),
         untrackedPaths: factSize(gitData.untracked),
@@ -581,13 +651,15 @@ function buildGitReport(rootName, root, gitData, options) {
     workflows: workflowFiles(visibleFiles),
     history: gitData.history,
     sensitiveIndicators: {
-      envFiles: sensitive.filter((file) => file.category === 'env').length,
-      keyLikeFiles: sensitive.filter((file) => file.category === 'keyLike').length,
-      credentialLikeFiles: sensitive.filter((file) => file.category === 'credentialLike').length,
-      trackedSensitiveFiles: sensitive.filter((file) => gitData.tracked?.has(file.path)).length,
-      untrackedSensitiveFiles: sensitive.filter((file) => gitData.untracked?.has(file.path)).length,
-      ignoredSensitiveFiles: sensitive.filter((file) => gitData.ignored?.has(file.path)).length,
-      unknownSensitiveFiles: sensitive.filter((file) => !gitData.tracked?.has(file.path) && !gitData.untracked?.has(file.path) && !gitData.ignored?.has(file.path)).length,
+      envFiles: categoryCount('env'),
+      keyLikeFiles: categoryCount('keyLike'),
+      credentialLikeFiles: categoryCount('credentialLike'),
+      trackedSensitiveFiles: factCount(gitData.tracked),
+      untrackedSensitiveFiles: factCount(gitData.untracked),
+      ignoredSensitiveFiles: factCount(gitData.ignored),
+      unknownSensitiveFiles: sensitivePathUniverseAvailable
+        ? sensitive.filter((file) => !gitData.tracked.has(file.path) && !gitData.untracked.has(file.path) && !gitData.ignored.has(file.path)).length
+        : null,
       ...(options.includeSensitivePaths ? { paths: sensitive.map((file) => file.path) } : {}),
     },
     warnings,

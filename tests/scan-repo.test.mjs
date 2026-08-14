@@ -57,6 +57,52 @@ async function snapshotFixtureRepository(prefix = 'keel-fixture-git-') {
   return root;
 }
 
+async function runScannerWithFailedGitLane(root, lane) {
+  const bin = await mkdtemp(join(tmpdir(), `keel-failed-${lane}-bin-`));
+  const fakeGit = join(bin, 'git');
+  await writeFile(fakeGit, `#!/usr/bin/env node
+const { spawnSync } = require('node:child_process');
+const args = process.argv.slice(2);
+const rootIndex = args.indexOf('-C');
+const command = rootIndex >= 0 ? args[rootIndex + 2] : '';
+let lane = '';
+if (command === 'ls-files' && args.includes('--stage')) lane = 'tracked';
+else if (command === 'ls-files' && args.includes('--ignored')) lane = 'ignored';
+else if (command === 'ls-files' && args.includes('--others')) lane = 'untracked';
+else if (command === 'diff' && args.includes('--cached')) lane = 'staged';
+else if (command === 'diff') lane = 'dirty';
+else if (command === 'status' && args.includes('--branch')) lane = 'head';
+else if (command === 'rev-parse' && args.includes('HEAD')) lane = 'head';
+else if (command === 'log') lane = 'history';
+else if (command === 'cat-file' && args.includes('blob')) lane = 'blob';
+if (lane === process.env.KEEL_TEST_FAIL_GIT_LANE) process.exit(73);
+const result = spawnSync('git', args, {
+  env: { ...process.env, PATH: process.env.KEEL_TEST_REAL_PATH },
+  stdio: 'inherit',
+});
+process.exit(result.status ?? 74);
+`);
+  await chmod(fakeGit, 0o755);
+  return runScanner(root, [], {
+    PATH: `${bin}:${process.env.PATH}`,
+    KEEL_TEST_FAIL_GIT_LANE: lane,
+    KEEL_TEST_REAL_PATH: process.env.PATH,
+  });
+}
+
+async function sensitiveFactRepository() {
+  const root = await mkdtemp(join(tmpdir(), 'keel-sensitive-facts-'));
+  await writeFile(join(root, '.gitignore'), 'ignored/\n');
+  await writeFile(join(root, '.env'), 'synthetic tracked placeholder\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.gitignore', '.env'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
+  await writeFile(join(root, 'untracked-secret.txt'), 'synthetic untracked placeholder\n');
+  await mkdir(join(root, 'ignored'));
+  await writeFile(join(root, 'ignored', 'token.txt'), 'synthetic ignored placeholder\n');
+  return root;
+}
+
 test('never invokes live filesystem directory enumeration', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-no-enumeration-root-'));
   const marker = join(await mkdtemp(join(tmpdir(), 'keel-no-enumeration-marker-')), 'enumerated');
@@ -109,6 +155,42 @@ test('reads staged index content while reporting unstaged working-copy content a
   assert.equal(value.evidenceProvenance.livePathStatus.dirtyPaths, 1);
   assert.equal(value.evidenceProvenance.livePathStatus.stagedPaths, 1);
   assert.equal(value.contentBlindSpots.dirtyFiles, 1);
+});
+
+test('requires native inspection when an oversized snapshot content candidate is skipped', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-oversized-snapshot-content-'));
+  await writeFile(join(root, 'AGENTS.md'), `[omitted](docs/oversized-reference.md)\n${'x'.repeat(1024 * 1024)}`);
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
+
+  const { raw, value } = runScanner(root);
+
+  assert.equal(value.evidenceProvenance.snapshot.available, true);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesInspected, 0);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesSkipped, 1);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesFailed, 0);
+  assert.equal(value.nativeLiveInspectionRequired.required, true);
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('snapshot-content-limit-exceeded'));
+  assert.ok(value.warnings.includes('Some snapshot content candidates exceeded the inspection limit; content evidence is incomplete.'));
+  assert.doesNotMatch(raw, /oversized-reference/);
+});
+
+test('requires native inspection when a snapshot candidate blob read fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-failed-snapshot-content-'));
+  await writeFile(join(root, 'AGENTS.md'), '[omitted](docs/failed-reference.md)\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
+
+  const { raw, value } = await runScannerWithFailedGitLane(root, 'blob');
+
+  assert.equal(value.evidenceProvenance.snapshot.available, true);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesInspected, 0);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesSkipped, 0);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesFailed, 1);
+  assert.equal(value.nativeLiveInspectionRequired.required, true);
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('snapshot-content-read-failed'));
+  assert.ok(value.warnings.includes('Some snapshot content candidates could not be read from Git objects; content evidence is incomplete.'));
+  assert.doesNotMatch(raw, /failed-reference/);
 });
 
 test('counts untracked content as a blind spot without reading or naming it', async () => {
@@ -512,6 +594,127 @@ test('bounds Git evidence collection time and degrades timeout to a path-free wa
   assert.doesNotMatch(raw, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
+for (const {
+  lane,
+  repositoryField,
+  sensitiveField,
+  warning,
+  reason,
+} of [
+  {
+    lane: 'tracked',
+    repositoryField: 'trackedFiles',
+    sensitiveField: 'trackedSensitiveFiles',
+    warning: 'Git index snapshot unavailable; tracked paths and content are incomplete.',
+    reason: 'git-evidence-incomplete',
+  },
+  {
+    lane: 'untracked',
+    repositoryField: 'untrackedFiles',
+    sensitiveField: 'untrackedSensitiveFiles',
+    warning: 'Git untracked-file evidence unavailable; untracked-file facts are incomplete.',
+    reason: 'untracked-path-status-evidence-incomplete',
+  },
+  {
+    lane: 'ignored',
+    repositoryField: 'ignoredFiles',
+    sensitiveField: 'ignoredSensitiveFiles',
+    warning: 'Git ignored-file evidence unavailable; ignored-file facts are incomplete.',
+    reason: 'ignored-path-status-evidence-incomplete',
+  },
+]) {
+  test(`preserves unknown sensitive counts when the ${lane} fact lane fails`, async () => {
+    const root = await sensitiveFactRepository();
+
+    const { value } = await runScannerWithFailedGitLane(root, lane);
+
+    assert.equal(value.repository[repositoryField], null);
+    assert.equal(value.sensitiveIndicators.envFiles, null);
+    assert.equal(value.sensitiveIndicators.keyLikeFiles, null);
+    assert.equal(value.sensitiveIndicators.credentialLikeFiles, null);
+    assert.equal(value.sensitiveIndicators[sensitiveField], null);
+    assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, null);
+    assert.ok(value.warnings.includes(warning));
+    assert.ok(value.nativeLiveInspectionRequired.reasons.includes(reason));
+  });
+}
+
+for (const {
+  lane,
+  repositoryField,
+  reason,
+} of [
+  { lane: 'dirty', repositoryField: 'dirtyFiles', reason: 'dirty-path-status-evidence-incomplete' },
+  { lane: 'staged', repositoryField: 'stagedFiles', reason: 'staged-path-status-evidence-incomplete' },
+]) {
+  test(`reports the failed ${lane} path-status lane as incomplete`, async () => {
+    const root = await mkdtemp(join(tmpdir(), `keel-${lane}-facts-`));
+    await writeFile(join(root, 'first.txt'), 'first\n');
+    await writeFile(join(root, 'second.txt'), 'second\n');
+    initializeRepository(root);
+    execFileSync('git', ['add', '.'], { cwd: root });
+    execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
+    await writeFile(join(root, 'first.txt'), 'dirty\n');
+    await writeFile(join(root, 'second.txt'), 'staged\n');
+    execFileSync('git', ['add', 'second.txt'], { cwd: root });
+
+    const { value } = await runScannerWithFailedGitLane(root, lane);
+
+    assert.equal(value.repository[repositoryField], null);
+    assert.equal(value.evidenceProvenance.livePathStatus.available, false);
+    assert.ok(value.warnings.includes(`Git ${lane}-file evidence unavailable; ${lane}-file facts are incomplete.`));
+    assert.ok(value.nativeLiveInspectionRequired.reasons.includes(reason));
+  });
+}
+
+test('distinguishes an unavailable HEAD-state probe from an unborn repository', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-failed-head-state-'));
+  await writeFile(join(root, 'first.txt'), 'first\n');
+  await writeFile(join(root, 'second.txt'), 'second\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
+  await writeFile(join(root, 'first.txt'), 'staged\n');
+  execFileSync('git', ['add', 'first.txt'], { cwd: root });
+
+  const { value } = await runScannerWithFailedGitLane(root, 'head');
+
+  assert.equal(value.evidenceProvenance.livePathStatus.headState, null);
+  assert.equal(value.repository.stagedFiles, 1);
+  assert.equal(value.history.commitsInspected, 1);
+  assert.ok(value.warnings.includes('Git HEAD-state evidence unavailable; HEAD state is incomplete.'));
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('head-state-evidence-incomplete'));
+});
+
+test('recognizes an unborn HEAD without reporting incomplete evidence', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-unborn-head-state-'));
+  await writeFile(join(root, 'AGENTS.md'), '# staged snapshot\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'AGENTS.md'], { cwd: root });
+
+  const { value } = runScanner(root);
+
+  assert.equal(value.evidenceProvenance.livePathStatus.headState, 'unborn');
+  assert.equal(value.repository.stagedFiles, 1);
+  assert.equal(value.history.commitsInspected, 0);
+  assert.equal(value.warnings.some((warning) => warning.includes('HEAD-state evidence unavailable')), false);
+  assert.equal(value.nativeLiveInspectionRequired.reasons.includes('head-state-evidence-incomplete'), false);
+});
+
+test('requires native inspection when Git history evidence fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-failed-history-'));
+  await writeFile(join(root, 'tracked.txt'), 'tracked\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', 'tracked.txt'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
+
+  const { value } = await runScannerWithFailedGitLane(root, 'history');
+
+  assert.ok(value.warnings.includes('Git history evidence unavailable; history facts are incomplete.'));
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('history-evidence-incomplete'));
+  assert.equal(value.nativeLiveInspectionRequired.required, true);
+});
+
 test('degrades a failed Git fact query to explicit incomplete evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-partial-git-root-'));
   await writeFile(join(root, '.env'), 'synthetic placeholder\n');
@@ -530,7 +733,7 @@ else if (args.includes('--stage')) process.exit(1);
   assert.equal(value.repository.gitAvailable, true);
   assert.equal(value.repository.trackedFiles, null);
   assert.equal(value.evidenceProvenance.snapshot.available, false);
-  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, 0);
+  assert.equal(value.sensitiveIndicators.unknownSensitiveFiles, null);
   assert.ok(value.warnings.includes('Git index snapshot unavailable; tracked paths and content are incomplete.'));
   assert.doesNotMatch(raw, new RegExp(root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
