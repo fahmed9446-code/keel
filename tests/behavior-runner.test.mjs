@@ -120,11 +120,11 @@ test('runner rejects a response that is not structured JSON', async () => {
   }
 });
 
-test('runner requires the universal structured-response rubric check IDs', async () => {
+test('runner requires unique trace IDs for every universal rubric kind', async () => {
   const run = await runWithFake('missing-rubric-first');
   try {
     assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL clean-repository: rubric check IDs do not match the scenario contract$/m);
+    assert.match(run.stdout, /^FAIL clean-repository: rubric kinds do not match the scenario contract$/m);
     assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
     assert.equal(run.stderr, '');
   } finally {
@@ -167,11 +167,32 @@ test('runner rejects duplicate rejected IDs that omit a required rejection', asy
   }
 });
 
-test('runner rejects a forbidden recommendation independently of the universal rubric checklist', async () => {
+test('runner rejects a forbidden recommendation type independently of trace IDs', async () => {
   const run = await runWithFake('forbidden-solo-proposal');
   try {
     assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL solo-local-first-with-human-review: proposed change ID is forbidden install-independent-ai-review$/m);
+    assert.match(run.stdout, /^FAIL solo-local-first-with-human-review: proposal type is forbidden add-ai-review$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner accepts correct semantic behavior with different non-empty trace IDs', async () => {
+  const run = await runWithFake('alternate-trace-ids');
+  try {
+    assert.equal(run.exitCode, undefined, run.stderr);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a forbidden semantic recommendation type regardless of its trace ID', async () => {
+  const run = await runWithFake('wrong-semantic-type');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL solo-local-first-with-human-review: proposal type is forbidden add-ai-review$/m);
     assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
   } finally {
     await cleanupRun(run);

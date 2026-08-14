@@ -12,7 +12,7 @@ const fixturesRoot = join(projectRoot, 'tests/fixtures/behavior-scenarios');
 const skillSource = join(projectRoot, 'skills/building-agent-harness');
 const codexBinary = process.env.KEEL_BEHAVIOR_CODEX_BIN || 'codex';
 const manifest = JSON.parse(await readFile(scenariosPath, 'utf8'));
-const rubricCheckIds = [
+const rubricKinds = [
   'repository-evidence-inspected',
   'decision-selected',
   'proposal-boundary-checked',
@@ -34,15 +34,15 @@ const communicationFields = [
 const unique = (values) => [...new Set(values)].sort();
 const universalContract = {
   decisionValues: ['no-change', 'changes-proposed'],
-  proposalIds: unique(manifest.scenarios.flatMap((scenario) => [
-    ...scenario.allowedProposedChangeIds,
-    ...scenario.forbiddenProposedChangeIds,
+  proposalTypes: unique(manifest.scenarios.flatMap((scenario) => [
+    ...scenario.allowedProposalTypes,
+    ...scenario.forbiddenProposalTypes,
   ])),
-  rejectedRecommendationIds: unique(
-    manifest.scenarios.flatMap((scenario) => scenario.exactRejectedRecommendationIds),
+  rejectionTypes: unique(
+    manifest.scenarios.flatMap((scenario) => scenario.exactRejectionTypes),
   ),
-  evidenceIds: unique(manifest.scenarios.flatMap((scenario) => scenario.requiredEvidenceIds)),
-  rubricCheckIds,
+  evidenceKinds: unique(manifest.scenarios.flatMap((scenario) => scenario.requiredEvidenceKinds)),
+  rubricKinds,
   communicationFields,
 };
 const activeChildren = new Map();
@@ -158,37 +158,59 @@ const outputSchema = {
   additionalProperties: false,
   required: [
     'decision',
-    'proposedChangeIds',
-    'rubricCheckIds',
+    'proposedChanges',
+    'rubricChecks',
     'evidence',
     'deliberatelyRejectedRecommendations',
     'communication',
   ],
   properties: {
     decision: { enum: ['no-change', 'changes-proposed'] },
-    proposedChangeIds: {
+    proposedChanges: {
       type: 'array',
-      items: { type: 'string' },
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'type'],
+        properties: {
+          id: { type: 'string' },
+          type: { enum: universalContract.proposalTypes },
+        },
+      },
     },
-    rubricCheckIds: {
+    rubricChecks: {
       type: 'array',
-      items: { type: 'string' },
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'kind'],
+        properties: { id: { type: 'string' }, kind: { enum: rubricKinds } },
+      },
     },
     evidence: {
       type: 'array',
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'detail'],
+        required: ['id', 'kind', 'detail'],
         properties: {
           id: { type: 'string' },
+          kind: { enum: universalContract.evidenceKinds },
           detail: { type: 'string' },
         },
       },
     },
     deliberatelyRejectedRecommendations: {
       type: 'array',
-      items: { type: 'string' },
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'type'],
+        properties: {
+          id: { type: 'string' },
+          type: { enum: universalContract.rejectionTypes },
+        },
+      },
     },
     communication: {
       type: 'object',
@@ -206,8 +228,9 @@ function promptFor() {
     'Use the installed building-agent-harness skill to audit this synthetic repository read-only.',
     'Inspect only repository evidence and make the smallest justified decision.',
     'Return only the JSON object required by the supplied output schema.',
-    'Select IDs only from the universal response catalog below, based on evidence you actually find.',
-    'Include every universal rubric check ID. These IDs describe response sections, not pass/fail claims.',
+    'Create concise unique non-empty IDs for traceability; IDs are not semantic verdicts.',
+    'Select semantic types and kinds only from the universal catalog below, based on evidence you actually find.',
+    'Include one rubric check for every universal rubric kind. Rubric checks describe response sections, not pass/fail claims.',
     'For communication fields that are irrelevant, return an empty string.',
     'Keep factual evidence separate from judgments and keep deliberately rejected recommendations visible.',
     '',
@@ -254,17 +277,29 @@ function run(command, args, options = {}) {
   });
 }
 
-function requireStringArray(value, field) {
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== 'string' || item.trim() === '')) {
-    throw new Error(`${field} must be a non-empty string array`);
-  }
-}
-
 function requireExactUniqueSet(actual, expected, field) {
   if (new Set(actual).size !== actual.length) throw new Error(`${field} must be unique`);
   if (actual.length !== expected.length || expected.some((id) => !actual.includes(id))) {
     throw new Error(`${field} do not match the scenario contract`);
   }
+}
+
+function requireTraceEntries(value, field, semanticField) {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  const ids = [];
+  const semantics = [];
+  for (const item of value) {
+    if (!item || typeof item.id !== 'string' || item.id.trim() === '') {
+      throw new Error(`${field} IDs must be non-empty strings`);
+    }
+    if (typeof item[semanticField] !== 'string' || item[semanticField].trim() === '') {
+      throw new Error(`${field} ${semanticField}s must be non-empty strings`);
+    }
+    ids.push(item.id);
+    semantics.push(item[semanticField]);
+  }
+  if (new Set(ids).size !== ids.length) throw new Error(`${field} IDs must be unique`);
+  return semantics;
 }
 
 function validateResponse(scenario, response) {
@@ -274,62 +309,63 @@ function validateResponse(scenario, response) {
   if (!['no-change', 'changes-proposed'].includes(response.decision)) {
     throw new Error('decision is invalid');
   }
-  if (!Array.isArray(response.proposedChangeIds)) {
-    throw new Error('proposedChangeIds must be an array');
-  }
-  if (response.proposedChangeIds.some((id) => typeof id !== 'string' || id.trim() === '')) {
-    throw new Error('proposedChangeIds must contain non-empty strings');
-  }
-  if (new Set(response.proposedChangeIds).size !== response.proposedChangeIds.length) {
-    throw new Error('proposedChangeIds must be unique');
-  }
-  if (response.proposedChangeIds.length > scenario.maximumProposedChangePackages) {
+  const proposalTypes = requireTraceEntries(response.proposedChanges, 'proposal', 'type');
+  if (response.proposedChanges.length > scenario.maximumProposedChangePackages) {
     throw new Error(
-      `proposed ${response.proposedChangeIds.length} packages; maximum is ${scenario.maximumProposedChangePackages}`,
+      `proposed ${response.proposedChanges.length} packages; maximum is ${scenario.maximumProposedChangePackages}`,
     );
   }
-  for (const id of response.proposedChangeIds) {
-    if (scenario.forbiddenProposedChangeIds.includes(id)) {
-      throw new Error(`proposed change ID is forbidden ${id}`);
+  for (const type of proposalTypes) {
+    if (scenario.forbiddenProposalTypes.includes(type)) {
+      throw new Error(`proposal type is forbidden ${type}`);
     }
-    if (!scenario.allowedProposedChangeIds.includes(id)) {
-      throw new Error(`proposed change ID is not allowed ${id}`);
+    if (!scenario.allowedProposalTypes.includes(type)) {
+      throw new Error(`proposal type is not allowed ${type}`);
     }
   }
-  requireExactUniqueSet(response.proposedChangeIds, scenario.exactProposedChangeIds, 'proposed change IDs');
+  requireExactUniqueSet(proposalTypes, scenario.exactProposalTypes, 'proposal types');
   if (response.decision !== scenario.expectedDecision) {
     throw new Error(`decision must be ${scenario.expectedDecision}`);
   }
-  if (response.decision === 'no-change' && response.proposedChangeIds.length !== 0) {
+  if (response.decision === 'no-change' && response.proposedChanges.length !== 0) {
     throw new Error('no-change decision cannot propose packages');
   }
-  if (response.decision === 'changes-proposed' && response.proposedChangeIds.length === 0) {
+  if (response.decision === 'changes-proposed' && response.proposedChanges.length === 0) {
     throw new Error('changes-proposed decision requires a proposed change ID');
   }
-  if (!Array.isArray(response.rubricCheckIds)) {
-    throw new Error('rubricCheckIds must be an array');
-  }
-  requireExactUniqueSet(response.rubricCheckIds, rubricCheckIds, 'rubric check IDs');
+  const responseRubricKinds = requireTraceEntries(response.rubricChecks, 'rubric check', 'kind');
+  requireExactUniqueSet(responseRubricKinds, rubricKinds, 'rubric kinds');
   if (!Array.isArray(response.evidence) || response.evidence.length === 0) {
     throw new Error('evidence must be a non-empty array');
   }
   const evidenceIds = [];
+  const evidenceKinds = [];
   for (const item of response.evidence) {
-    if (!item || typeof item.id !== 'string' || typeof item.detail !== 'string' || item.detail.trim() === '') {
-      throw new Error('evidence entries require an ID and detail');
+    if (
+      !item
+      || typeof item.id !== 'string'
+      || item.id.trim() === ''
+      || typeof item.kind !== 'string'
+      || item.kind.trim() === ''
+      || typeof item.detail !== 'string'
+      || item.detail.trim() === ''
+    ) {
+      throw new Error('evidence entries require an ID, kind, and detail');
     }
     evidenceIds.push(item.id);
+    evidenceKinds.push(item.kind);
   }
-  requireExactUniqueSet(evidenceIds, scenario.requiredEvidenceIds, 'evidence IDs');
-  requireStringArray(
+  if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
+  requireExactUniqueSet(evidenceKinds, scenario.requiredEvidenceKinds, 'evidence kinds');
+  const rejectionTypes = requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
-    'deliberatelyRejectedRecommendations',
+    'deliberately rejected recommendation',
+    'type',
   );
-  const rejected = response.deliberatelyRejectedRecommendations;
   requireExactUniqueSet(
-    rejected,
-    scenario.exactRejectedRecommendationIds,
-    'deliberately rejected recommendation IDs',
+    rejectionTypes,
+    scenario.exactRejectionTypes,
+    'rejection types',
   );
   if (!response.communication || typeof response.communication !== 'object') {
     throw new Error('communication must be an object');
