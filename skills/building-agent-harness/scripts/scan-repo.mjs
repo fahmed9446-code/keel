@@ -82,7 +82,7 @@ function isolatedGitEnvironment() {
     'GIT_WORK_TREE',
   ]);
   for (const name of Object.keys(environment)) {
-    if (exact.has(name) || name.startsWith('GIT_CONFIG_')) delete environment[name];
+    if (exact.has(name) || name.startsWith('GIT_CONFIG_') || name.startsWith('GIT_TRACE')) delete environment[name];
   }
   Object.assign(environment, {
     GIT_CONFIG_GLOBAL: devNull,
@@ -114,29 +114,126 @@ function sensitiveNameCategory(name) {
 }
 
 async function walk(root) {
-  const files = [];
-  const directories = new Set();
-  let skippedSymbolicLinks = 0;
-  async function visit(directory) {
-    const entries = await readdir(directory, { withFileTypes: true });
+  const canonicalRoot = realpathSync(root);
+  const contained = (path) => {
+    const pathFromRoot = relative(canonicalRoot, path);
+    return pathFromRoot === '' || (pathFromRoot !== '..' && !pathFromRoot.startsWith(`..${sep}`));
+  };
+  async function visit(directory, expectedIdentity) {
+    let before;
+    let canonicalDirectory;
+    try {
+      before = await lstat(directory);
+      if (before.isSymbolicLink()) return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 1 };
+      if (!before.isDirectory() || (expectedIdentity && (before.dev !== expectedIdentity.device || before.ino !== expectedIdentity.inode))) {
+        return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 0 };
+      }
+      canonicalDirectory = realpathSync(directory);
+      if (!contained(canonicalDirectory)) return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 0 };
+    } catch {
+      return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: 0 };
+    }
+    const files = [];
+    const directories = new Map();
+    let skippedSymbolicLinks = 0;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      try {
+        const current = await lstat(directory);
+        if (current.isSymbolicLink()) skippedSymbolicLinks += 1;
+      } catch {
+        // The directory disappeared before it could contribute evidence.
+      }
+      return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks };
+    }
     entries.sort((left, right) => codeUnitCompare(left.name, right.name));
     for (const entry of entries) {
-      if (entry.name === '.git') continue;
       const absolute = resolve(directory, entry.name);
       const path = portablePath(relative(root, absolute));
-      if (entry.isSymbolicLink()) {
+      let info;
+      try {
+        info = await lstat(absolute);
+      } catch {
+        continue;
+      }
+      if (info.isSymbolicLink()) {
         skippedSymbolicLinks += 1;
-      } else if (entry.isDirectory()) {
-        directories.add(path);
-        if (!SKIP_DIRECTORIES.has(entry.name)) await visit(absolute);
-      } else if (entry.isFile()) {
-        const info = await lstat(absolute);
-        files.push({ path, absolute, bytes: info.size, category: sensitiveCategory(path) });
+      } else if (entry.name === '.git') {
+        continue;
+      } else if (info.isDirectory()) {
+        if (SKIP_DIRECTORIES.has(entry.name)) {
+          directories.set(path, { device: info.dev, inode: info.ino });
+        } else {
+          const child = await visit(absolute, { device: info.dev, inode: info.ino });
+          skippedSymbolicLinks += child.skippedSymbolicLinks;
+          if (child.valid) {
+            directories.set(path, { device: info.dev, inode: info.ino });
+            for (const file of child.files) files.push(file);
+            for (const [childPath, identity] of child.directories) directories.set(childPath, identity);
+          }
+        }
+      } else if (info.isFile()) {
+        files.push({ path, absolute, bytes: info.size, category: sensitiveCategory(path), device: info.dev, inode: info.ino });
       }
     }
+    try {
+      const after = await lstat(directory);
+      if (after.isSymbolicLink()) return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks: skippedSymbolicLinks + 1 };
+      if (!after.isDirectory() || after.dev !== before.dev || after.ino !== before.ino || realpathSync(directory) !== canonicalDirectory) {
+        return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks };
+      }
+    } catch {
+      return { valid: false, files: [], directories: new Map(), skippedSymbolicLinks };
+    }
+    return { valid: true, files, directories, skippedSymbolicLinks };
   }
-  await visit(root);
-  return { files, directories, skippedSymbolicLinks };
+  const result = await visit(root);
+  return { files: result.files, directories: result.directories, skippedSymbolicLinks: result.skippedSymbolicLinks };
+}
+
+async function retainUnchangedFiles(files, state) {
+  const retained = [];
+  for (const file of files) {
+    try {
+      const info = await lstat(file.absolute);
+      if (info.isSymbolicLink()) {
+        state.skippedSymbolicLinks += 1;
+      } else if (info.isFile() && info.dev === file.device && info.ino === file.inode) {
+        retained.push(file);
+      }
+    } catch {
+      // A removed or inaccessible entry cannot contribute evidence.
+    }
+  }
+  return retained;
+}
+
+async function retainUnchangedDirectories(root, directories, state) {
+  const canonicalRoot = realpathSync(root);
+  const retained = new Set();
+  for (const [path, identity] of directories) {
+    const absolute = resolve(root, path);
+    try {
+      const info = await lstat(absolute);
+      if (info.isSymbolicLink()) {
+        state.skippedSymbolicLinks += 1;
+        continue;
+      }
+      const pathFromRoot = relative(canonicalRoot, realpathSync(absolute));
+      if (info.isDirectory()
+        && info.dev === identity.device
+        && info.ino === identity.inode
+        && pathFromRoot !== '..'
+        && !pathFromRoot.startsWith(`..${sep}`)) {
+        retained.add(path);
+      }
+    } catch {
+      // A removed or inaccessible entry cannot contribute evidence.
+    }
+  }
+  return retained;
 }
 
 function git(root, args) {
@@ -286,13 +383,18 @@ async function readTextFileWithoutFollowingLinks(file, state) {
     handle = await open(file.absolute, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
   } catch (error) {
     if (error?.code === 'ELOOP') state.skippedSymbolicLinks += 1;
+    state.invalidFiles.add(file.path);
     return null;
   }
   try {
     const info = await handle.stat();
-    if (!info.isFile()) return null;
+    if (!info.isFile() || info.dev !== file.device || info.ino !== file.inode) {
+      state.invalidFiles.add(file.path);
+      return null;
+    }
     return await handle.readFile('utf8');
   } catch {
+    state.invalidFiles.add(file.path);
     return null;
   } finally {
     await handle.close();
@@ -385,17 +487,30 @@ async function scan(options) {
   } catch {
     throw new Error('repository traversal failed');
   }
-  const { files, directories, skippedSymbolicLinks } = walkData;
+  const { files: discoveredFiles, directories: discoveredDirectories, skippedSymbolicLinks } = walkData;
   const gitData = gitEvidence(root);
+  const scanState = { skippedSymbolicLinks, invalidFiles: new Set() };
+  let files = await retainUnchangedFiles(discoveredFiles, scanState);
+  let directories = await retainUnchangedDirectories(root, discoveredDirectories, scanState);
   gitData.history.fileFrequency = gitData.history.fileFrequency.filter((item) => !sensitiveCategory(item.path));
+  const provisionalSurfaces = registryMatches(
+    files.filter((file) => !file.category),
+    new Set([...directories].filter((path) => !sensitiveCategory(path))),
+  );
+  const syntacticReferences = await inducedReading(files, provisionalSurfaces, scanState);
+  let scripts = await packageScripts(files, scanState);
+  files = await retainUnchangedFiles(files.filter((file) => !scanState.invalidFiles.has(file.path)), scanState);
+  const retainedDirectoryIdentities = new Map([...discoveredDirectories].filter(([path]) => directories.has(path)));
+  directories = await retainUnchangedDirectories(root, retainedDirectoryIdentities, scanState);
+  const retainedPaths = new Set(files.map((file) => file.path));
+  syntacticReferences.references = syntacticReferences.references.filter((item) => retainedPaths.has(item.sourcePath));
+  syntacticReferences.total = syntacticReferences.references.length;
+  if (!retainedPaths.has('package.json')) scripts = [];
   const agentSurfaces = registryMatches(
     files.filter((file) => !file.category),
     new Set([...directories].filter((path) => !sensitiveCategory(path))),
   );
   const sensitive = files.filter((file) => file.category);
-  const scanState = { skippedSymbolicLinks };
-  const syntacticReferences = await inducedReading(files, agentSurfaces, scanState);
-  const scripts = await packageScripts(files, scanState);
   const report = {
     schemaVersion: SCHEMA_VERSION,
     registryVersion: REGISTRY_VERSION,

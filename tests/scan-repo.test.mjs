@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
@@ -182,7 +182,40 @@ if (args.includes('rev-parse')) {
   assert.equal(value.files.skippedSymbolicLinks, 1);
   assert.deepEqual(value.syntacticReferences.references, []);
   assert.ok(value.warnings.includes('Skipped 1 symbolic link; symbolic links are never followed.'));
-  assert.doesNotMatch(raw, /external-secret|outside\.md/);
+  assert.doesNotMatch(raw, /AGENTS\.md|external-secret|outside\.md/);
+});
+
+test('does not traverse a directory replaced by an outside symbolic link during the scan', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-directory-race-root-'));
+  const padding = join(root, 'a-padding');
+  const raceDirectory = join(root, 'z-race');
+  const outside = await mkdtemp(join(tmpdir(), 'keel-directory-race-outside-'));
+  await mkdir(padding);
+  await mkdir(raceDirectory);
+  for (let index = 0; index < 5_000; index += 1) {
+    await writeFile(join(padding, `padding-${String(index).padStart(4, '0')}.txt`), 'x');
+  }
+  await writeFile(join(outside, 'AGENTS.md'), '[outside](external-outside.md)\n');
+  await writeFile(join(outside, 'package.json'), '{"scripts":{"outside-package-script":"echo unsafe"}}\n');
+  const replacementScript = `
+const { renameSync, symlinkSync } = require('node:fs');
+setTimeout(() => {
+  renameSync(process.argv[1], process.argv[1] + '-original');
+  symlinkSync(process.argv[2], process.argv[1], 'dir');
+}, 75);
+`;
+  const replacer = spawn(process.execPath, ['-e', replacementScript, raceDirectory, outside], { stdio: 'ignore' });
+  const replacementDone = new Promise((resolvePromise, rejectPromise) => {
+    replacer.once('error', rejectPromise);
+    replacer.once('exit', (code) => code === 0 ? resolvePromise() : rejectPromise(new Error(`replacement exited ${code}`)));
+  });
+
+  const { raw, value } = runScanner(root, ['--max-output-bytes', String(2 * 1024 * 1024)]);
+  await replacementDone;
+
+  assert.equal(value.files.skippedSymbolicLinks, 1);
+  assert.ok(value.warnings.includes('Skipped 1 symbolic link; symbolic links are never followed.'));
+  assert.doesNotMatch(raw, /z-race|external-outside|outside-package-script/);
 });
 
 test('enforces a deterministic 32 KiB default output ceiling with explicit truncation', async () => {
@@ -372,6 +405,28 @@ test('does not execute a repository-configured fsmonitor hook or mutate the work
   const after = await snapshot(root);
   await assert.rejects(readFile(marker), { code: 'ENOENT' });
   assert.deepEqual(after, before);
+});
+
+test('clears inherited Git trace destinations so evidence collection cannot write files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-git-trace-root-'));
+  await writeFile(join(root, 'tracked.txt'), 'tracked\n');
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  execFileSync('git', ['add', 'tracked.txt'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
+  const traceVariables = [
+    'GIT_TRACE',
+    'GIT_TRACE_PERFORMANCE',
+    'GIT_TRACE2',
+    'GIT_TRACE2_EVENT',
+    'GIT_TRACE2_PERF',
+  ];
+  const environment = {};
+  const markers = traceVariables.map((name) => join(root, `trace-${name.toLowerCase().replaceAll('_', '-')}.log`));
+  for (let index = 0; index < traceVariables.length; index += 1) environment[traceVariables[index]] = markers[index];
+
+  runScanner(root, [], environment);
+
+  for (const marker of markers) await assert.rejects(readFile(marker), { code: 'ENOENT' });
 });
 
 test('bounds Git evidence collection time and degrades timeout to a path-free warning', async () => {
