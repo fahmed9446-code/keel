@@ -8,7 +8,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:behavior": "node tests/run-behavior-tests.mjs"
   },
   "license": "Apache-2.0"
 }

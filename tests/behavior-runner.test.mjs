@@ -1,0 +1,204 @@
+import assert from 'node:assert/strict';
+import { access, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { execFile, spawn } from 'node:child_process';
+import test from 'node:test';
+
+const execFileAsync = promisify(execFile);
+const rootPath = fileURLToPath(new URL('../', import.meta.url));
+const runnerPath = fileURLToPath(new URL('./run-behavior-tests.mjs', import.meta.url));
+const fakeCodexPath = fileURLToPath(new URL('./helpers/fake-codex.mjs', import.meta.url));
+const scenariosUrl = new URL('./scenarios.json', import.meta.url);
+const fixturesUrl = new URL('./fixtures/behavior-scenarios/', import.meta.url);
+
+async function runWithFake(mode = 'pass', extraEnv = {}) {
+  const scratch = await mkdtemp(join(tmpdir(), 'keel-behavior-runner-test-'));
+  const logPath = join(scratch, 'calls.jsonl');
+  try {
+    const result = await execFileAsync(process.execPath, [runnerPath], {
+      cwd: rootPath,
+      env: {
+        ...process.env,
+        ...extraEnv,
+        KEEL_BEHAVIOR_CODEX_BIN: fakeCodexPath,
+        KEEL_FAKE_CODEX_LOG: logPath,
+        KEEL_FAKE_CODEX_MODE: mode,
+      },
+    });
+    return { ...result, logPath, scratch };
+  } catch (error) {
+    return {
+      stdout: error.stdout ?? '',
+      stderr: error.stderr ?? '',
+      exitCode: error.code,
+      logPath,
+      scratch,
+    };
+  }
+}
+
+async function cleanupRun(run) {
+  await rm(run.scratch, { recursive: true, force: true });
+}
+
+test('scenario fixtures correspond one-to-one with the six regression contracts', async () => {
+  const manifest = JSON.parse(await readFile(scenariosUrl, 'utf8'));
+  const fixtureEntries = await readdir(fixturesUrl, { withFileTypes: true });
+  const fixtureIds = fixtureEntries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort();
+  const scenarioIds = manifest.scenarios.map(({ id }) => id).sort();
+
+  assert.equal(manifest.benchmark, false);
+  assert.deepEqual(fixtureIds, scenarioIds);
+  assert.equal(fixtureIds.length, 6);
+});
+
+test('runner uses one correctly assembled fresh Codex process and repository per scenario', async () => {
+  const run = await runWithFake();
+  try {
+    assert.equal(run.exitCode, undefined, run.stderr);
+    assert.equal(run.stderr, '');
+    assert.equal(
+      run.stdout,
+      [
+        'PASS clean-repository',
+        'PASS bloated-permanent-context',
+        'PASS mechanically-induced-reading',
+        'PASS conflicting-current-and-historical-authority',
+        'PASS solo-local-first-with-human-review',
+        'PASS material-technical-review-gap',
+        'PASS 6/6 behavior scenarios',
+        '',
+      ].join('\n'),
+    );
+
+    const calls = (await readFile(run.logPath, 'utf8')).trim().split('\n').map(JSON.parse);
+    assert.equal(calls.length, 6);
+    assert.equal(new Set(calls.map(({ repository }) => repository)).size, 6);
+    assert.equal(new Set(calls.map(({ outputPath }) => outputPath)).size, 6);
+
+    for (const call of calls) {
+      assert.deepEqual(call.args.slice(0, 8), [
+        '-a',
+        'never',
+        'exec',
+        '--ephemeral',
+        '--ignore-user-config',
+        '--sandbox',
+        'read-only',
+        '-C',
+      ]);
+      assert.equal(call.args[8], call.repository);
+      assert.equal(call.args[9], '--output-schema');
+      assert.equal(call.args[11], '--output-last-message');
+      assert.equal(call.args.length, 13);
+      assert.equal(call.skillInstalled, true);
+      assert.equal(call.fixtureInstalled, true);
+      assert.equal(call.repositoryIsClean, true);
+      assert.equal(call.promptProvided, true);
+      assert.equal(call.schemaValid, true);
+      assert.equal(call.outputIsOutsideRepository, true);
+      await assert.rejects(access(call.repository));
+    }
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a response that is not structured JSON', async () => {
+  const run = await runWithFake('malformed-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: response is not valid JSON$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.doesNotMatch(run.stdout, /prompt|transcript|token|cost|score/i);
+    assert.equal(run.stderr, '');
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner requires every must-do, must-not-do, and communication rubric check', async () => {
+  const run = await runWithFake('missing-rubric-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: missing rubric check clean-repository:must-do:1$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.equal(run.stderr, '');
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner enforces each scenario maximum proposed package count', async () => {
+  const run = await runWithFake('too-many-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: proposed 1 packages; maximum is 0$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.equal(run.stderr, '');
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a forbidden recommendation even when the model marks every rubric check passed', async () => {
+  const run = await runWithFake('forbidden-solo-proposal');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL solo-local-first-with-human-review: proposed change ID is not allowed install-independent-ai-review$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner isolates repository setup from inherited Git configuration', async () => {
+  const run = await runWithFake('pass', {
+    GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'commit.gpgSign',
+    GIT_CONFIG_VALUE_0: 'true',
+  });
+  try {
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner terminates its child and removes temporary data when interrupted', async () => {
+  const scratch = await mkdtemp(join(tmpdir(), 'keel-behavior-signal-test-'));
+  const logPath = join(scratch, 'calls.jsonl');
+  const child = spawn(process.execPath, [runnerPath], {
+    cwd: rootPath,
+    env: {
+      ...process.env,
+      KEEL_BEHAVIOR_CODEX_BIN: fakeCodexPath,
+      KEEL_FAKE_CODEX_LOG: logPath,
+      KEEL_FAKE_CODEX_MODE: 'hang-first',
+    },
+    stdio: 'ignore',
+  });
+
+  try {
+    let call;
+    for (let attempt = 0; attempt < 100 && !call; attempt += 1) {
+      try {
+        call = JSON.parse((await readFile(logPath, 'utf8')).trim().split('\n')[0]);
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    assert.ok(call, 'fake executable did not start');
+    child.kill('SIGTERM');
+    await new Promise((resolve) => child.once('exit', resolve));
+    await assert.rejects(access(call.repository));
+    assert.doesNotMatch(await readFile(logPath, 'utf8'), /<scenario-contract>|Use the installed/);
+  } finally {
+    if (child.exitCode === null) child.kill('SIGKILL');
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
