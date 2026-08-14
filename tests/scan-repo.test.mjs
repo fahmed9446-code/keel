@@ -481,3 +481,29 @@ test('degrades an invalid Git top-level response without exposing it', async () 
   assert.ok(value.warnings.includes('Git metadata unavailable; tracked status and history are incomplete.'));
   assert.doesNotMatch(raw, /secret|credential-missing/);
 });
+
+test('returns a stable path-free error if the repository root disappears during Git collection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-root-mutation-secret-'));
+  await mkdir(join(root, 'nested'));
+  const bin = await mkdtemp(join(tmpdir(), 'keel-root-mutation-bin-'));
+  const fakeGit = join(bin, 'git');
+  await writeFile(fakeGit, `#!/usr/bin/env node
+const { renameSync } = require('node:fs');
+const args = process.argv.slice(2);
+const rootIndex = args.indexOf('-C');
+const root = args[rootIndex + 1];
+if (args.includes('rev-parse')) {
+  renameSync(root, root + '-moved');
+  process.stdout.write(root + '\\n');
+}
+`);
+  await chmod(fakeGit, 0o755);
+
+  const result = spawnSync(process.execPath, [scanner, '--root', root], {
+    encoding: 'utf8',
+    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stderr, 'scan-repo: repository changed during scan\n');
+});

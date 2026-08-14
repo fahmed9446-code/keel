@@ -211,7 +211,12 @@ async function retainUnchangedFiles(files, state) {
 }
 
 async function retainUnchangedDirectories(root, directories, state) {
-  const canonicalRoot = realpathSync(root);
+  let canonicalRoot;
+  try {
+    canonicalRoot = realpathSync(root);
+  } catch {
+    throw new Error('repository changed during scan');
+  }
   const retained = new Set();
   for (const [path, identity] of directories) {
     const absolute = resolve(root, path);
