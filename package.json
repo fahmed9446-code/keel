@@ -1,6 +1,6 @@
 {
   "name": "keel-agent-harness",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Build fast. Stay on course.",
   "type": "module",
