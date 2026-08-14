@@ -155,7 +155,8 @@ function identifyScenario(guidance) {
 
 function leaksOracle(scenarioId) {
   return ['<scenario-contract>', 'expectedDecision', 'exactProposalTypes',
-    'forbiddenProposalTypes', 'exactRejectionTypes', 'requiredEvidenceKinds', 'mustDo', 'mustNotDo',
+    'requiredAnyProposalTypes', 'forbiddenProposalTypes', 'exactRejectionTypes',
+    'requiredRejectionTypes', 'requiredEvidenceKinds', 'mustDo', 'mustNotDo',
     'communicationRequirements', scenarioId].some((text) => prompt.includes(text));
 }
 
@@ -194,6 +195,39 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
         kind: 'fabricated-evidence-kind',
         detail: 'This semantic kind is outside the universal catalog.',
       });
+    }
+    if (scenarioId === 'clean-repository' && mode === 'extra-valid-rejection-first') {
+      response.deliberatelyRejectedRecommendations.push({
+        id: 'extra-valid-ai-review-rejection',
+        type: 'add-ai-review',
+      });
+    }
+    if (scenarioId === 'clean-repository' && mode === 'missing-required-rejection-first') {
+      response.deliberatelyRejectedRecommendations.shift();
+    }
+    if (scenarioId === 'clean-repository' && mode === 'unknown-rejection-first') {
+      response.deliberatelyRejectedRecommendations.push({
+        id: 'unknown-rejection',
+        type: 'fabricated-rejection-type',
+      });
+    }
+    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-remove-unconditional-read') {
+      response.proposedChanges = [{
+        id: 'remove-unconditional-history-read',
+        type: 'remove-unconditional-read',
+      }];
+    }
+    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-unrelated-proposal') {
+      response.proposedChanges = [{
+        id: 'unrelated-authority-change',
+        type: 'clarify-current-authority',
+      }];
+    }
+    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-forbidden-proposal') {
+      response.proposedChanges = [{
+        id: 'forbidden-handbook-replacement',
+        type: 'replace-handbook',
+      }];
     }
     if (scenarioId === 'clean-repository' && mode === 'hang-first') {
       process.on('SIGTERM', () => {});

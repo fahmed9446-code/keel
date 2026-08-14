@@ -39,7 +39,7 @@ const universalContract = {
     ...scenario.forbiddenProposalTypes,
   ])),
   rejectionTypes: unique(
-    manifest.scenarios.flatMap((scenario) => scenario.exactRejectionTypes),
+    manifest.scenarios.flatMap((scenario) => scenario.requiredRejectionTypes),
   ),
   evidenceKinds: unique(manifest.scenarios.flatMap((scenario) => scenario.requiredEvidenceKinds)),
   rubricKinds,
@@ -295,6 +295,25 @@ function requireEvidenceKinds(actual, required) {
   }
 }
 
+function requireRejectionTypes(actual, required) {
+  if (new Set(actual).size !== actual.length) throw new Error('rejection types must be unique');
+  for (const type of actual) {
+    if (!universalContract.rejectionTypes.includes(type)) {
+      throw new Error(`rejection type is not in the universal catalog ${type}`);
+    }
+  }
+  if (required.some((type) => !actual.includes(type))) {
+    throw new Error('rejection types do not match the scenario contract');
+  }
+}
+
+function requireAnyProposalType(actual, requiredAny) {
+  if (new Set(actual).size !== actual.length) throw new Error('proposal types must be unique');
+  if (!requiredAny.some((type) => actual.includes(type))) {
+    throw new Error('proposal types do not match the scenario contract');
+  }
+}
+
 function requireTraceEntries(value, field, semanticField) {
   if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
   const ids = [];
@@ -334,7 +353,11 @@ function validateResponse(scenario, response) {
       throw new Error(`proposal type is not allowed ${type}`);
     }
   }
-  requireExactUniqueSet(proposalTypes, scenario.exactProposalTypes, 'proposal types');
+  if (scenario.requiredAnyProposalTypes) {
+    requireAnyProposalType(proposalTypes, scenario.requiredAnyProposalTypes);
+  } else {
+    requireExactUniqueSet(proposalTypes, scenario.exactProposalTypes, 'proposal types');
+  }
   if (response.decision !== scenario.expectedDecision) {
     throw new Error(`decision must be ${scenario.expectedDecision}`);
   }
@@ -373,11 +396,7 @@ function validateResponse(scenario, response) {
     'deliberately rejected recommendation',
     'type',
   );
-  requireExactUniqueSet(
-    rejectionTypes,
-    scenario.exactRejectionTypes,
-    'rejection types',
-  );
+  requireRejectionTypes(rejectionTypes, scenario.requiredRejectionTypes);
   if (!response.communication || typeof response.communication !== 'object') {
     throw new Error('communication must be an object');
   }

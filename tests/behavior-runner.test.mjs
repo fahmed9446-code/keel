@@ -167,6 +167,69 @@ test('runner rejects duplicate rejected IDs that omit a required rejection', asy
   }
 });
 
+test('runner allows additional unique rejection types from the universal catalog', async () => {
+  const run = await runWithFake('extra-valid-rejection-first');
+  try {
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a response missing a required rejection type', async () => {
+  const run = await runWithFake('missing-required-rejection-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(run.stdout, /^FAIL clean-repository: rejection types do not match the scenario contract$/m);
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a rejection type outside the universal catalog', async () => {
+  const run = await runWithFake('unknown-rejection-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(
+      run.stdout,
+      /^FAIL clean-repository: rejection type is not in the universal catalog fabricated-rejection-type$/m,
+    );
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner accepts either valid proposal alternative for bloated permanent context', async () => {
+  for (const mode of ['pass', 'bloated-remove-unconditional-read']) {
+    const run = await runWithFake(mode);
+    try {
+      assert.equal(run.exitCode, undefined, `${mode}: ${run.stdout}`);
+      assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+    } finally {
+      await cleanupRun(run);
+    }
+  }
+});
+
+test('runner rejects unrelated and forbidden proposals for bloated permanent context', async () => {
+  for (const [mode, message] of [
+    ['bloated-unrelated-proposal', 'proposal type is not allowed clarify-current-authority'],
+    ['bloated-forbidden-proposal', 'proposal type is forbidden replace-handbook'],
+  ]) {
+    const run = await runWithFake(mode);
+    try {
+      assert.equal(run.exitCode, 1, `${mode}: ${run.stdout}`);
+      assert.match(run.stdout, new RegExp(`^FAIL bloated-permanent-context: ${message}$`, 'm'));
+      assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    } finally {
+      await cleanupRun(run);
+    }
+  }
+});
+
 test('runner rejects a forbidden recommendation type independently of trace IDs', async () => {
   const run = await runWithFake('forbidden-solo-proposal');
   try {

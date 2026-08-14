@@ -65,10 +65,16 @@ test('scenario suite is capped at six pass-fail contracts', async () => {
     assert.ok(scenario.maximumProposedChangePackages <= 5);
     assert.ok(['no-change', 'changes-proposed'].includes(scenario.expectedDecision));
     assert.ok(Array.isArray(scenario.allowedProposalTypes));
-    assert.ok(Array.isArray(scenario.exactProposalTypes));
-    assert.ok(scenario.exactProposalTypes.every((type) => scenario.allowedProposalTypes.includes(type)));
+    const hasExactProposalTypes = Array.isArray(scenario.exactProposalTypes);
+    const hasRequiredAnyProposalTypes = Array.isArray(scenario.requiredAnyProposalTypes);
+    assert.notEqual(hasExactProposalTypes, hasRequiredAnyProposalTypes);
+    const requiredProposalTypes = hasExactProposalTypes
+      ? scenario.exactProposalTypes
+      : scenario.requiredAnyProposalTypes;
+    assert.ok(requiredProposalTypes.every((type) => scenario.allowedProposalTypes.includes(type)));
+    if (hasRequiredAnyProposalTypes) assert.ok(requiredProposalTypes.length > 0);
     assert.ok(Array.isArray(scenario.forbiddenProposalTypes));
-    assert.ok(Array.isArray(scenario.exactRejectionTypes));
+    assert.ok(Array.isArray(scenario.requiredRejectionTypes));
     assert.ok(Array.isArray(scenario.requiredEvidenceKinds));
     assert.ok(Array.isArray(scenario.requiredCommunicationFields));
     assert.ok(Array.isArray(scenario.communicationRequirements));
