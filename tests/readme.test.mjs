@@ -13,6 +13,72 @@ async function loadReadme() {
   return readFile(readmeUrl, 'utf8');
 }
 
+function assertRestrainedBenefitClaims(readme) {
+  const startHeading = '## What Keel can help with';
+  const endHeading = '## The simple idea';
+  const start = readme.indexOf(startHeading);
+  const end = readme.indexOf(endHeading, start + startHeading.length);
+  assert.notEqual(start, -1, `${startHeading} must exist`);
+  assert.ok(end > start, `${endHeading} must follow ${startHeading}`);
+  const benefits = readme.slice(start, end);
+
+  for (const pattern of [
+    /less wasted AI context/i,
+    /potentially lower unnecessary token use/i,
+    /less repeated explanation/i,
+    /reduced drift/i,
+    /easier long-task recovery/i,
+    /clearer authority/i,
+    /conditional independent review/i,
+    /safer dangerous operations/i,
+    /less unnecessary process/i,
+    /better maintainability/i,
+  ]) assert.match(benefits, pattern);
+
+  const leadIn = benefits.slice(0, benefits.indexOf('\n- '));
+  assert.match(leadIn, /\b(?:depending on|may|might|can|could|potential(?:ly)?)\b/i);
+  assert.match(benefits, /\b(?:not promised outcomes?|does not promise|no guarantee)\b/i);
+
+  const positiveSubject = '(?:Keel|it|the tool|these changes?)\\s+'
+    + '(?!(?:(?:does|do|can|will|is|are|may|might)\\s+not|cannot|never)\\b)';
+  for (const outcome of [
+    '(?:guarantees?|ensures?)\\b',
+    '[^.!?\\n]{0,100}\\b(?:faster|quicker)\\b',
+    '[^.!?\\n]{0,100}\\b(?:correct(?:ness)?|bug-free)\\b',
+    '[^.!?\\n]{0,100}\\b(?:prevents?|eliminates?)\\b[^.!?\\n]{0,40}\\bbugs?\\b',
+    '[^.!?\\n]{0,100}\\b(?:completely safe|guaranteed safety|safety guaranteed)\\b',
+  ]) {
+    assert.doesNotMatch(benefits, new RegExp(`\\b${positiveSubject}${outcome}`, 'i'));
+  }
+
+  // The brief prohibits percentage promises anywhere, not only in the benefits section.
+  assert.doesNotMatch(readme, /\b\d+(?:\.\d+)?%\b/);
+}
+
+function benefitClaimFixture(claim, outsideSection = '') {
+  return `# Keel
+
+${outsideSection}
+
+## What Keel can help with
+
+Depending on the repository, a small, evidence-backed change may offer:
+
+- Less wasted AI context and potentially lower unnecessary token use.
+- Less repeated explanation and easier long-task recovery.
+- Reduced drift and clearer authority.
+- Conditional independent review.
+- Safer dangerous operations.
+- Less unnecessary process and better maintainability.
+
+${claim}
+
+These are potential benefits, not promised outcomes. Keel does not promise faster delivery, correctness, bug prevention, or complete safety.
+
+## The simple idea
+`;
+}
+
 test('README follows the beginner-first progressive heading order', async () => {
   const readme = await loadReadme();
   const headings = [
@@ -62,20 +128,38 @@ test('upper README answers the beginner comprehension contract before technical 
 
 test('README describes benefits as possibilities without guarantees or numeric promises', async () => {
   const readme = await loadReadme();
-  for (const pattern of [
-    /less wasted AI context/i,
-    /potentially lower unnecessary token use/i,
-    /less repeated explanation/i,
-    /reduced drift/i,
-    /easier long-task recovery/i,
-    /clearer authority/i,
-    /conditional independent review/i,
-    /safer dangerous operations/i,
-    /less unnecessary process/i,
-    /better maintainability/i,
-  ]) assert.match(readme, pattern);
-  assert.doesNotMatch(readme, /\b\d+(?:\.\d+)?%\b/);
-  assert.doesNotMatch(readme, /\bguarantee(?:d|s)?\b|\bensures?\b|\bprevent(?:s|ed)? (?:all )?bugs\b/i);
+  assertRestrainedBenefitClaims(readme);
+});
+
+test('benefit claim audit allows explicit negation and unrelated ensure wording', () => {
+  const readme = benefitClaimFixture(
+    [
+      'Keel does not guarantee correctness.',
+      'Keel cannot ensure correct code.',
+      'Keel does not prevent bugs.',
+      'Keel does not make delivery faster.',
+      'Keel does not make dangerous operations completely safe.',
+    ].join(' '),
+    'Before installation, ensure Node.js is available.',
+  );
+
+  assert.doesNotThrow(() => assertRestrainedBenefitClaims(readme));
+});
+
+test('benefit claim audit rejects prohibited positive outcome claims', () => {
+  for (const claim of [
+    'Keel guarantees better results.',
+    'Keel makes delivery faster.',
+    'Keel produces correct code.',
+    'Keel prevents bugs.',
+    'Keel makes dangerous operations completely safe.',
+  ]) {
+    assert.throws(
+      () => assertRestrainedBenefitClaims(benefitClaimFixture(claim)),
+      assert.AssertionError,
+      claim,
+    );
+  }
 });
 
 test('README preserves accurate support tiers and their limitations', async () => {
