@@ -30,7 +30,6 @@ Before making runtime, capability, or native-location claims, detect the active 
 
 - Separate facts from judgments. Lexical filenames, links, paths, sizes, Git status, and history patterns are evidence—not authority or policy conclusions.
 - Distinguish always-loaded instruction bytes from documents opened because those instructions mechanically reference them.
-- If a mechanically required startup read adds material repeated context and is not justified for every task, recommend removing or scoping that unconditional read. Do not conclude **No meaningful changes required** merely because the permanent instruction file itself is small.
 - Treat explicitly superseded history as historical evidence, not current authority, unless repository behavior contradicts that label.
 - Do not turn missing product code, CI, documentation, or team process into a harness finding unless the audit scope and repository evidence make it material.
 - Prefer one canonical repository truth and thin agent-specific routing. Do not create independently maintained Codex, Claude, and Gemini copies of shared invariants.

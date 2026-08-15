@@ -55,6 +55,20 @@ test('scenario fixtures correspond one-to-one with the six regression contracts'
   assert.equal(fixtureIds.length, 6);
 });
 
+test('mechanically induced reading fixture has small permanent guidance and material induced context', async () => {
+  const fixture = new URL('./fixtures/behavior-scenarios/mechanically-induced-reading/', import.meta.url);
+  const [guidance, startup, optionalIdeas] = await Promise.all([
+    readFile(new URL('AGENTS.md', fixture), 'utf8'),
+    readFile(new URL('docs/startup.md', fixture), 'utf8'),
+    readFile(new URL('docs/ideas.md', fixture), 'utf8'),
+  ]);
+
+  assert.ok(Buffer.byteLength(guidance) < 512);
+  assert.match(guidance, /Before every task, read `docs\/startup\.md`/);
+  assert.ok(Buffer.byteLength(startup) >= 4_096);
+  assert.ok(Buffer.byteLength(optionalIdeas) < 512);
+});
+
 test('runner uses one correctly assembled fresh Codex process and repository per scenario', async () => {
   const run = await runWithFake();
   try {
