@@ -182,7 +182,7 @@ Dirty working-copy content, untracked content, and ignored content are explicit 
 ### Output and classification
 
 - The current public format is scanner schema 2 with agent-surface registry `2026-08-14.2`.
-- Ordinary serialized output is capped at 32 KiB with explicit deterministic truncation. `--max-output-bytes` may lower the budget, but not below the exact 4 KiB serialized ceiling.
+- Ordinary serialized output defaults to a 32 KiB ceiling with explicit deterministic truncation. The advanced `--max-output-bytes` option may lower the budget to the exact 4 KiB minimum or deliberately raise the 32 KiB default for a diagnostic scan.
 - Classification is lexical and syntactic only. Filenames, paths, links, sizes, Git status, and history patterns are evidence; they are not semantic authority judgments.
 - Sensitive-looking paths are summarized by category and tracked status by default. The scanner does not read their values. `--include-sensitive-paths` reveals matching path names only for an explicit diagnostic need; keep that output out of chat unless needed.
 - Symbolic links are skipped, and Git subprocesses are configured to avoid hooks, prompts, lazy fetching, and network retrieval. The scanner has no intended network behavior and writes its JSON report only to standard output.
@@ -194,6 +194,10 @@ Dirty working-copy content, untracked content, and ignored content are explicit 
 Keel lists stable change IDs beside each proposed package. Approval of the audit, general encouragement, or approval of one package does not authorize another. Installation accepts an exact subset. Dangerous or destructive work requires separate approval immediately before it runs, even when its package was already approved.
 
 Existing files have an additional gate: automatic editing requires a clean, tracked, stage-zero regular Git blob whose exact bytes match the current file. Dirty, untracked, non-Git, unmerged, symbolic-link, submodule, missing-object, or otherwise unreconstructible files are refusal cases rather than guessed edits.
+
+Every install, state, and uninstall target also passes the same repository-containment check. Absolute or parent-traversing paths, a symbolic-link ancestor, and runtimes without safe exclusive no-follow creation are refusal cases.
+
+Installation uses a transaction-style failure contract. If validation or state persistence fails, Keel compensates only while current bytes still equal the exact attempted postimage; otherwise it preserves the artifact and prior state and gives reviewable manual recovery steps instead of guessing.
 
 ### State schema 2
 

@@ -39,6 +39,25 @@ test('every managed path has approved ownership without cross-package overlap', 
   assert.match(contract, /different (?:approved )?(?:change )?packages.*same path.*refuse/is);
 });
 
+test('every install, state, and uninstall target passes a symlink-safe containment gate', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  assert.match(contract, /same containment gate.*install.*state.*uninstall/is);
+  assert.match(contract, /reject.*absolute.*`\.\.`.*empty path segment/is);
+  assert.match(contract, /lstat.*every existing.*ancestor.*reject.*symbolic link.*non-directory/is);
+  assert.match(contract, /immediately before.*mutation.*revalidate.*containment/is);
+  assert.match(contract, /new target.*exclusive.*no-follow.*(?:unavailable|cannot provide).*refuse/is);
+});
+
+test('failed validation or state persistence cannot silently leave an unmanaged install', async () => {
+  const contract = await readFile(contractUrl, 'utf8');
+  assert.match(contract, /precompute.*postimage.*next state.*before.*mutation/is);
+  assert.match(contract, /state.*atomic.*replacement/is);
+  assert.match(contract, /validation.*state (?:write|persistence).*fails.*current bytes.*attempted postimage/is);
+  assert.match(contract, /restore.*exact preimage.*remove.*Keel-created/is);
+  assert.match(contract, /cannot prove.*leave.*untouched.*manual recovery/is);
+  assert.match(contract, /never mark.*installed.*unless.*validation.*state.*succeed/is);
+});
+
 test('automatic edits to existing files require an exact clean tracked Git preimage', async () => {
   const contract = await readFile(contractUrl, 'utf8');
   assert.match(contract, /existing file.*Git worktree.*tracked.*clean/is);

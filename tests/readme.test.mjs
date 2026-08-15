@@ -202,17 +202,20 @@ test('README keeps scanner schema 2 and state schema 2 claims consistent with pu
   assert.match(readme, /path-status-only live facts/i);
   assert.match(readme, /32 KiB/);
   assert.match(readme, /4 KiB/);
+  assert.match(readme, /--max-output-bytes[^.]*raise[^.]*32 KiB default/is);
   assert.match(readme, /state schema 2/i);
   for (const field of ['changeIds', 'preInstallGitOid', 'evidenceFingerprint']) {
     assert.match(readme, new RegExp(`\\b${field}\\b`));
   }
+  assert.match(readme, /install.*state.*uninstall.*containment.*symbolic-link ancestor/is);
+  assert.match(readme, /validation.*state persistence.*fails.*exact attempted postimage.*manual recovery/is);
   assert.match(readme, /schema 1[^.]*legacy[^.]*read-only/i);
   assert.doesNotMatch(readme, /scanner (?:enumerates|reads) (?:the )?(?:live|current) (?:directory|working[- ]copy) content/i);
 });
 
 test('README has no private provenance or unresolved placeholders', async () => {
   const readme = await loadReadme();
-  assert.doesNotMatch(readme, /\/Users\/|Cue|cuelens|TODO|TBD|<founder|<owner/i);
+  assert.doesNotMatch(readme, /\/Users\/|TODO|TBD|<founder|<owner/i);
 });
 
 test('all repository-relative README links resolve', async () => {

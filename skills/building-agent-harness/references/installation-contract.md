@@ -8,16 +8,25 @@ Re-read the target files and `.keel/state.json`, if present, immediately before 
 
 Each approved change package must declare all repository-relative target paths before installation. Keep one managed-artifact record per repository-relative path. If different approved change packages target the same path, refuse the later package; do not create overlapping ownership or silently merge the packages. An artifact may list multiple change IDs only when those IDs were approved and installed together as one indivisible package.
 
+### Path containment gate
+
+Apply the same containment gate to every install, state, and uninstall path, including `.keel/state.json` and any temporary sibling used for an atomic write. Reject absolute paths, `..`, and empty path segments, including platform-specific equivalents, before filesystem access. Resolve the repository root itself to a canonical path. Starting at that root, `lstat` every existing ancestor of the target and reject a symbolic link or non-directory. Immediately before each mutation, repeat those checks and revalidate that the canonical parent remains contained by the repository root.
+
+For a new target, require the final path to be absent and create it with an exclusive, no-follow primitive. If the active runtime cannot provide both exclusive creation and no-follow containment, refuse automatic creation. After creation, `lstat` the new entry and revalidate its ancestors before continuing. Do not follow a link merely to decide whether it points back inside the repository.
+
 ## Minimal installation
 
 For each approved package:
 
 1. Resolve and validate the package's complete artifact-to-change-ID mapping. Every managed artifact has a non-empty `changeIds` array, and every ID in `changeIds` must be both explicitly approved and present in `installedChangeIds` after validation succeeds.
-2. For a new target, confirm the path does not exist immediately before creation. For an existing file, pass the Git preimage gate below before editing.
-3. Make the smallest coherent edit.
-4. Run the package-specific validation.
-5. Record the resulting hash and installed IDs only after validation succeeds.
-6. Report the installed ID, validation, risk, and rollback path.
+2. Pass the path containment gate for every target. For a new target, also confirm the path does not exist immediately before creation. For an existing file, pass the Git preimage gate below before editing.
+3. Precompute the exact intended postimage, post-install hash, complete managed-artifact records, and complete next state before any mutation. Validate that planned state against the approved IDs, current state, and schema.
+4. Make the smallest coherent edit.
+5. Run the package-specific validation.
+6. Persist the complete next state with one containment-checked atomic state-file replacement. Never mark an ID installed unless both package validation and state persistence succeed.
+7. Report the installed ID, validation, risk, and rollback path.
+
+Treat validation and state persistence as one transaction boundary. If validation or the state write fails, stop. Re-read each attempted target. Only while its current bytes still equal the exact attempted postimage and the containment gate still passes may Keel restore the exact preimage for an existing file or remove an unchanged Keel-created file. The package approval authorizes only that exact failure compensation. If Keel cannot prove those predicates, leave the artifact untouched, preserve the prior state byte-for-byte, and provide exact reviewable manual recovery instructions; never guess, overwrite later work, or record the failed ID as installed.
 
 Create `.keel/state.json` only after an approved installation or explicit approval to persist deferred decisions. No installation and no approved persisted decision means no state file.
 

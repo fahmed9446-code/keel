@@ -1,4 +1,4 @@
 interface:
   display_name: "Building Agent Harness"
   short_description: "Audit and improve repository agent architecture"
-  default_prompt: "Audit this repository agent harness and recommend only evidence-backed changes."
+  default_prompt: "Use $building-agent-harness to audit this repository and recommend only evidence-backed changes."

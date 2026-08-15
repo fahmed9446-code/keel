@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const skillUrl = new URL('../skills/building-agent-harness/SKILL.md', import.meta.url);
+const openaiMetadataUrl = new URL('../skills/building-agent-harness/agents/openai.yaml', import.meta.url);
 const auditUrl = new URL('../skills/building-agent-harness/references/audit-method.md', import.meta.url);
 const communicationUrl = new URL('../skills/building-agent-harness/references/communication-contract.md', import.meta.url);
 const scenariosUrl = new URL('./scenarios.json', import.meta.url);
@@ -15,6 +16,11 @@ test('skill metadata is discovery-focused and contains no scaffold placeholders'
   const skill = await loadSkill();
   assert.match(skill, /^---\nname: building-agent-harness\ndescription: Use when a repository relies heavily on AI coding agents and the user wants to audit or improve agent instructions, memory, context loading, review independence, or architectural drift across repeated coding sessions\.\n---/);
   assert.doesNotMatch(skill, /TODO|\[TODO/);
+});
+
+test('Codex UI metadata invokes the packaged skill explicitly', async () => {
+  const metadata = await readFile(openaiMetadataUrl, 'utf8');
+  assert.match(metadata, /default_prompt: "[^"]*\$building-agent-harness[^"]*"/);
 });
 
 test('skill states the audit boundary and explicit anti-triggers', async () => {
@@ -81,6 +87,7 @@ test('audit method documents the optional scanner safety boundary', async () => 
   assert.match(audit, /node scripts\/scan-repo\.mjs --root/);
   assert.match(audit, /lexical and syntactic classification only/i);
   assert.match(audit, /32 KiB/);
+  assert.match(audit, /--max-output-bytes[^.]*raise[^.]*32 KiB default/is);
   assert.match(audit, /--include-sensitive-paths/);
   assert.match(audit, /registryVersion/);
 });

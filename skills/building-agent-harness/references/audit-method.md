@@ -14,7 +14,7 @@ From the skill directory, run:
 node scripts/scan-repo.mjs --root /path/to/repository
 ```
 
-The scanner performs lexical and syntactic classification only; make architectural and semantic classifications here in the skill. Check `registryVersion` before relying on known agent surfaces. Ordinary output is capped at 32 KiB and reports deterministic truncation explicitly.
+The scanner performs lexical and syntactic classification only; make architectural and semantic classifications here in the skill. Check `registryVersion` before relying on known agent surfaces. Ordinary output uses a 32 KiB default and reports deterministic truncation explicitly. The advanced `--max-output-bytes` option may lower the budget to the exact 4 KiB minimum or deliberately raise the 32 KiB default for a diagnostic scan.
 
 Scanner content evidence is a Git index/blob snapshot, not current working-copy truth. Live dirty, staged, untracked, and ignored facts are path-status-only live facts; their content is not read. Use transparent native-agent live inspection when the report says it is required, and disclose the scanner's content blind spots.
 
