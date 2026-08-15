@@ -289,6 +289,19 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
         response.decision = 'changes-proposed';
         response.proposedChanges = [{ id: 'unearned-change', type: 'add-hosted-control' }];
       }
+      if (scenarioId === 'clean-repository' && mode === 'bounded-semantic-diagnostic-first') {
+        response.decision = 'changes-proposed';
+        response.proposedChanges = Array.from({ length: 100 }, (_, index) => ({
+          id: `diagnostic-package-${index + 1}`,
+          type: index % 2 === 0 ? 'add-hosted-control' : 'clarify-current-authority',
+        }));
+        response.evidence[0].detail = 'PRIVATE-DIAGNOSTIC-SENTINEL';
+        response.communication.mainTakeaway = 'PRIVATE-DIAGNOSTIC-SENTINEL';
+        response.deliberatelyRejectedRecommendations = [{
+          id: 'private-rejection',
+          type: 'PRIVATE-DIAGNOSTIC-SENTINEL',
+        }];
+      }
       if (scenarioId === 'clean-repository' && mode === 'duplicate-rejection-first') {
         const first = response.deliberatelyRejectedRecommendations[0];
         response.deliberatelyRejectedRecommendations = [

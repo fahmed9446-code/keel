@@ -144,6 +144,56 @@ test('runner enforces each scenario maximum proposed package count', async () =>
   }
 });
 
+test('runner emits a bounded semantic diagnostic without raw or private response content', async () => {
+  const run = await runWithFake('bounded-semantic-diagnostic-first');
+  try {
+    assert.equal(run.exitCode, 1, run.stdout);
+    const line = run.stdout.split('\n').find((value) => value.startsWith('DIAG clean-repository: '));
+    assert.ok(line, run.stdout);
+    assert.ok(Buffer.byteLength(line, 'utf8') <= 2_048, `diagnostic was ${Buffer.byteLength(line)} bytes`);
+    assert.doesNotMatch(run.stdout, /PRIVATE-DIAGNOSTIC-SENTINEL/);
+    const diagnostic = JSON.parse(line.slice('DIAG clean-repository: '.length));
+    assert.deepEqual(diagnostic, {
+      schemaVersion: 1,
+      scenarioId: 'clean-repository',
+      available: true,
+      decision: 'changes-proposed',
+      proposedPackages: {
+        count: 100,
+        semanticTypes: ['add-hosted-control', 'clarify-current-authority'],
+        truncated: false,
+      },
+      expected: {
+        decision: 'no-change',
+        anyProposalTypes: [],
+        maximumProposedChangePackages: 0,
+        communicationFields: ['mainTakeaway', 'technicalEvidence'],
+      },
+      actual: {
+        matchedMustDoOutcomes: ['communication:mainTakeaway', 'communication:technicalEvidence'],
+        unmatchedMustDoOutcomes: ['decision:no-change'],
+        mustNotDoViolations: ['add-hosted-control'],
+      },
+      deliberatelyRejectedRecommendationCount: 1,
+    });
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner emits a path-safe unavailable diagnostic when no structured response exists', async () => {
+  const run = await runWithFake('malformed-first');
+  try {
+    assert.equal(run.exitCode, 1);
+    assert.match(
+      run.stdout,
+      /^DIAG clean-repository: \{"schemaVersion":1,"scenarioId":"clean-repository","available":false,"reason":"structured-response-unavailable"\}$/m,
+    );
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
 test('runner keeps scenario-specific expected answers out of the Codex prompt', async () => {
   const run = await runWithFake();
   try {

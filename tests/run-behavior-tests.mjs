@@ -32,6 +32,8 @@ const communicationFields = [
   'runtimeLimitations',
 ];
 const unique = (values) => [...new Set(values)].sort();
+const maximumDiagnosticItems = 8;
+const maximumDiagnosticLineBytes = 2_048;
 const universalContract = {
   decisionValues: ['no-change', 'changes-proposed'],
   proposalTypes: unique(manifest.scenarios.flatMap((scenario) => [
@@ -306,6 +308,101 @@ function requireTraceEntries(value, field, semanticField) {
   return semantics;
 }
 
+function boundedSemanticTypes(values) {
+  const safe = unique(values.filter((value) => universalContract.proposalTypes.includes(value)));
+  return {
+    values: safe.slice(0, maximumDiagnosticItems),
+    truncated: safe.length > maximumDiagnosticItems,
+  };
+}
+
+function semanticDiagnostic(scenario, response) {
+  const { mustDo, mustNotDo, maximumProposedChangePackages } = scenario.outcomeContract;
+  const proposedChanges = Array.isArray(response?.proposedChanges) ? response.proposedChanges : [];
+  const proposedTypes = proposedChanges
+    .map((item) => item?.type)
+    .filter((value) => typeof value === 'string');
+  const boundedProposals = boundedSemanticTypes(proposedTypes);
+  const requiredProposalTypes = mustDo.anyProposalTypes ?? [];
+  const matchedProposalTypes = boundedProposals.values.filter((type) =>
+    requiredProposalTypes.includes(type));
+  const communicationMatches = mustDo.communicationFields.map((field) => ({
+    outcome: `communication:${field}`,
+    matched: typeof response?.communication?.[field] === 'string'
+      && response.communication[field].trim() !== '',
+  }));
+  const decisionMatched = response?.decision === mustDo.decision;
+  const proposalMatched = requiredProposalTypes.length === 0 || matchedProposalTypes.length > 0;
+  const matchedMustDoOutcomes = [
+    ...(decisionMatched ? [`decision:${mustDo.decision}`] : []),
+    ...(requiredProposalTypes.length > 0 && proposalMatched
+      ? matchedProposalTypes.map((type) => `proposal:${type}`)
+      : []),
+    ...communicationMatches.filter(({ matched }) => matched).map(({ outcome }) => outcome),
+  ];
+  const unmatchedMustDoOutcomes = [
+    ...(!decisionMatched ? [`decision:${mustDo.decision}`] : []),
+    ...(requiredProposalTypes.length > 0 && !proposalMatched
+      ? ['proposal:any-recognized-required-type']
+      : []),
+    ...communicationMatches.filter(({ matched }) => !matched).map(({ outcome }) => outcome),
+  ];
+
+  return {
+    schemaVersion: 1,
+    scenarioId: scenario.id,
+    available: true,
+    decision: ['no-change', 'changes-proposed'].includes(response?.decision)
+      ? response.decision
+      : 'invalid',
+    proposedPackages: {
+      count: proposedChanges.length,
+      semanticTypes: boundedProposals.values,
+      truncated: boundedProposals.truncated,
+    },
+    expected: {
+      decision: mustDo.decision,
+      anyProposalTypes: requiredProposalTypes,
+      maximumProposedChangePackages,
+      communicationFields: mustDo.communicationFields,
+    },
+    actual: {
+      matchedMustDoOutcomes,
+      unmatchedMustDoOutcomes,
+      mustNotDoViolations: unique(
+        boundedProposals.values.filter((type) => mustNotDo.proposalTypes.includes(type)),
+      ),
+    },
+    deliberatelyRejectedRecommendationCount:
+      Array.isArray(response?.deliberatelyRejectedRecommendations)
+        ? response.deliberatelyRejectedRecommendations.length
+        : 0,
+  };
+}
+
+function unavailableSemanticDiagnostic(scenario) {
+  return {
+    schemaVersion: 1,
+    scenarioId: scenario.id,
+    available: false,
+    reason: 'structured-response-unavailable',
+  };
+}
+
+function diagnosticLine(scenario, diagnostic) {
+  const prefix = `DIAG ${scenario.id}: `;
+  const serialized = JSON.stringify(diagnostic);
+  if (Buffer.byteLength(prefix + serialized, 'utf8') <= maximumDiagnosticLineBytes) {
+    return prefix + serialized;
+  }
+  return prefix + JSON.stringify({
+    schemaVersion: 1,
+    scenarioId: scenario.id,
+    available: false,
+    reason: 'semantic-diagnostic-exceeded-budget',
+  });
+}
+
 function validateResponse(scenario, response) {
   if (!response || typeof response !== 'object' || Array.isArray(response)) {
     throw new Error('response must be a JSON object');
@@ -455,7 +552,12 @@ async function runScenario(scenario) {
     } catch {
       throw new Error('response is not valid JSON');
     }
-    validateResponse(scenario, response);
+    try {
+      validateResponse(scenario, response);
+    } catch (error) {
+      error.semanticDiagnostic = semanticDiagnostic(scenario, response);
+      throw error;
+    }
   } finally {
     if (!retainedTemporaryRoots.has(temporaryRoot)) {
       await rm(temporaryRoot, { recursive: true, force: true });
@@ -475,7 +577,13 @@ for (const scenario of manifest.scenarios) {
     passed += 1;
     console.log(`PASS ${scenario.id}`);
   } catch (error) {
-    if (!shuttingDown) console.log(`FAIL ${scenario.id}: ${error.message}`);
+    if (!shuttingDown) {
+      console.log(`FAIL ${scenario.id}: ${error.message}`);
+      console.log(diagnosticLine(
+        scenario,
+        error.semanticDiagnostic ?? unavailableSemanticDiagnostic(scenario),
+      ));
+    }
   } finally {
     activeScenarioTasks.delete(scenarioTask);
   }
