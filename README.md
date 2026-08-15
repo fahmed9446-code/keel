@@ -40,6 +40,10 @@ An AI coding agent needs the right information at the right time—not every pie
 
 Not every repository receives every mechanism. Keel audits first and may recommend none of them.
 
+## How Keel differs from a linter
+
+Linters are useful for checking known configuration and code rules. Keel works at a different layer: it asks what this repository's AI-development setup should look like, based on its context loading, authority, recurring friction, memory, review needs, and operating model. It may recommend guidance, memory, guardrails, review—or none of them. **No meaningful changes required** is a valid result.
+
 ## Before Keel / After Keel
 
 This is an example, not a diagnosis of every AI-built repository:
@@ -96,23 +100,34 @@ git clone https://github.com/fahmed9446-code/keel.git
 cd keel
 ```
 
-Copy the complete `building-agent-harness` directory into the target project's native skill location. Replace `/path/to/project` with that project's path.
+For individual use, install Keel once in your agent's user-level skill location, then use it across repositories. For Codex, this is the recommended starting point:
 
-### Codex
+```bash
+mkdir -p "$HOME/.agents/skills"
+cp -R skills/building-agent-harness "$HOME/.agents/skills/"
+```
+
+This user-level Codex location is documented by OpenAI and keeps an occasional audit tool out of every target repository. Restart Codex if the skill does not appear immediately.
+
+### Project-level installation
+
+A project-level install remains appropriate when multiple contributors need identical behavior, several users or agents share the repository, the team wants the Keel version tied to repository history, or repository-specific persisted behavior is intentional. Replace `/path/to/project` below with the target project's path.
+
+#### Codex
 
 ```bash
 mkdir -p /path/to/project/.agents/skills
 cp -R skills/building-agent-harness /path/to/project/.agents/skills/
 ```
 
-### Claude Code
+#### Claude Code
 
 ```bash
 mkdir -p /path/to/project/.claude/skills
 cp -R skills/building-agent-harness /path/to/project/.claude/skills/
 ```
 
-### Gemini CLI
+#### Gemini CLI
 
 ```bash
 mkdir -p /path/to/project/.gemini/skills
@@ -128,6 +143,8 @@ Keep the audit read-only.
 ```
 
 Copy the whole directory: the skill, scanner, registry, metadata, and references are one distribution unit.
+
+Claude Code also documents a user-level `~/.claude/skills/` location. Keel has not locally runtime-tested that path. Keel V1 does not guess a Gemini CLI user-level location; use its verified project path unless current official documentation establishes otherwise.
 
 ## Technical architecture
 
@@ -178,6 +195,12 @@ Scanner schema 2 reports two deliberately separate evidence lanes:
 - **Live status evidence:** dirty, staged, untracked, and ignored information consists of path-status-only live facts and counts. The scanner never reads that live content and never enumerates the live directory tree.
 
 Dirty working-copy content, untracked content, and ignored content are explicit content blind spots. Failed Git lanes, unsupported entries, skipped or unreadable snapshot candidates, and other incomplete evidence also trigger `nativeLiveInspectionRequired`. The agent must label any transparent native-agent live inspection separately from scanner snapshot evidence and disclose what remained unseen.
+
+### Measured repository effects
+
+When complete before-and-after evidence exists, Keel may report modest deterministic facts already present in scanner output: the count of instruction-file candidates, the count of mechanically recognized references, and exact snapshot bytes for referenced files whose sizes are present. The skill still makes the semantic judgment about which candidates are actually always loaded, duplicated, or authoritative.
+
+If evidence is incomplete or truncated, Keel omits the affected measurement. These repository facts are not measurements of model token use, cost, speed, correctness, or task performance, and Keel does not translate them into such claims.
 
 ### Output and classification
 
@@ -236,13 +259,13 @@ npm test
 node skills/building-agent-harness/scripts/scan-repo.mjs --root .
 ```
 
-The deterministic suite covers scanner schema and limits, sensitive-path handling, zero target mutation, skill discovery, state restraint, and uninstall safety. The non-benchmark behavior runner uses six synthetic repository scenarios and a fresh ephemeral, read-only Codex process per scenario:
+`npm test` is deterministic, offline, and independent of Codex authentication. It covers scanner schema and limits, sensitive-path handling, zero target mutation, skill discovery, state restraint, uninstall safety, and the behavior runner's local contract.
 
 ```bash
 npm run test:behavior
 ```
 
-See the [behavior runner](tests/run-behavior-tests.mjs) and its [scenario contracts](tests/scenarios.json). It validates decisions, evidence, exact proposal limits, deliberately rejected recommendations, communication fields, process freshness, and cleanup; it is not a quality score or public benchmark.
+`npm run test:behavior` is an opt-in live reasoning regression suite. Its six scenarios check observable required and forbidden outcomes, package limits, evidence, communication, deliberate rejections, process freshness, and cleanup. Bounded semantic diagnostics explain failures without retaining raw prompts, transcripts, repository content, or private response text. The scenarios are regression contracts, not a model benchmark.
 
 ## Privacy
 

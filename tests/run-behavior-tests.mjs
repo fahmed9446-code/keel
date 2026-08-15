@@ -12,13 +12,6 @@ const fixturesRoot = join(projectRoot, 'tests/fixtures/behavior-scenarios');
 const skillSource = join(projectRoot, 'skills/building-agent-harness');
 const codexBinary = process.env.KEEL_BEHAVIOR_CODEX_BIN || 'codex';
 const manifest = JSON.parse(await readFile(scenariosPath, 'utf8'));
-const rubricKinds = [
-  'repository-evidence-inspected',
-  'decision-selected',
-  'proposal-boundary-checked',
-  'rejections-recorded',
-  'communication-populated',
-];
 const communicationFields = [
   'mainTakeaway',
   'technicalEvidence',
@@ -40,7 +33,6 @@ const universalContract = {
     ...(scenario.outcomeContract.mustDo.anyProposalTypes ?? []),
     ...scenario.outcomeContract.mustNotDo.proposalTypes,
   ])),
-  rubricKinds,
   communicationFields,
 };
 const activeChildren = new Map();
@@ -85,19 +77,6 @@ async function terminateChild(child, temporaryRoot) {
 async function shutdown(exitCode) {
   if (shuttingDown) return;
   shuttingDown = true;
-  if (process.env.KEEL_BEHAVIOR_TEST_POST_SHUTDOWN_SPAWN_MARKER) {
-    try {
-      await run(
-        process.execPath,
-        [
-          '-e',
-          'require("node:fs").writeFileSync(process.argv[1], "spawned")',
-          process.env.KEEL_BEHAVIOR_TEST_POST_SHUTDOWN_SPAWN_MARKER,
-        ],
-        { timeoutMs: 1_000 },
-      );
-    } catch {}
-  }
   const processed = new Set();
   let childExitUnconfirmed = false;
   while (true) {
@@ -157,7 +136,6 @@ const outputSchema = {
   required: [
     'decision',
     'proposedChanges',
-    'rubricChecks',
     'evidence',
     'deliberatelyRejectedRecommendations',
     'communication',
@@ -174,15 +152,6 @@ const outputSchema = {
           id: { type: 'string' },
           type: { enum: universalContract.proposalTypes },
         },
-      },
-    },
-    rubricChecks: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['id', 'kind'],
-        properties: { id: { type: 'string' }, kind: { enum: rubricKinds } },
       },
     },
     evidence: {
@@ -229,7 +198,6 @@ function promptFor() {
     'Create concise unique non-empty IDs for traceability; IDs are not semantic verdicts.',
     'Select proposal types only from the universal catalog below, based on evidence you actually find.',
     'Use concise semantic labels for evidence and deliberately rejected recommendations; equivalent wording is acceptable.',
-    'Include one rubric check for every universal rubric kind. Rubric checks describe response sections, not pass/fail claims.',
     'For communication fields that are irrelevant, return an empty string.',
     'Keep factual evidence separate from judgments and keep deliberately rejected recommendations visible.',
     '',
@@ -274,13 +242,6 @@ function run(command, args, options = {}) {
       resolve({ code, signal, timedOut });
     });
   });
-}
-
-function requireExactUniqueSet(actual, expected, field) {
-  if (new Set(actual).size !== actual.length) throw new Error(`${field} must be unique`);
-  if (actual.length !== expected.length || expected.some((id) => !actual.includes(id))) {
-    throw new Error(`${field} do not match the scenario contract`);
-  }
 }
 
 function requireAnyProposalType(actual, requiredAny) {
@@ -434,8 +395,6 @@ function validateResponse(scenario, response) {
   if (response.decision === 'changes-proposed' && response.proposedChanges.length === 0) {
     throw new Error('changes-proposed decision requires a proposed change ID');
   }
-  const responseRubricKinds = requireTraceEntries(response.rubricChecks, 'rubric check', 'kind');
-  requireExactUniqueSet(responseRubricKinds, rubricKinds, 'rubric kinds');
   if (!Array.isArray(response.evidence) || response.evidence.length === 0) {
     throw new Error('evidence must be a non-empty array');
   }

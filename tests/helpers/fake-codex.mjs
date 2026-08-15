@@ -10,13 +10,7 @@ const repository = valueAfter('-C');
 const outputPath = valueAfter('--output-last-message');
 const schemaPath = valueAfter('--output-schema');
 const prompt = args.at(-1);
-const rubricKinds = [
-  'repository-evidence-inspected',
-  'decision-selected',
-  'proposal-boundary-checked',
-  'rejections-recorded',
-  'communication-populated',
-];
+const mode = process.env.KEEL_FAKE_CODEX_MODE ?? 'pass';
 const communicationFields = [
   'mainTakeaway', 'technicalEvidence', 'permanentContextCost', 'permanentBytes',
   'inducedReading', 'facts', 'authorityJudgment', 'rejectedRecommendationsSummary',
@@ -28,56 +22,40 @@ const communication = (values) => Object.fromEntries(
 
 const scenarioPresentation = {
   'clean-repository': {
-    evidence: [
-      { detail: 'AGENTS.md contains one short instruction surface.' },
-      { detail: 'AGENTS.md requires human review.' },
-    ],
+    evidence: ['AGENTS.md contains one short instruction surface.', 'AGENTS.md requires human review.'],
     communication: communication({
       mainTakeaway: 'No meaningful changes required. The instruction architecture is intentionally small.',
       technicalEvidence: 'The permanent guidance is one short file with tests and human review.',
     }),
   },
   'bloated-permanent-context': {
-    evidence: [
-      { detail: 'AGENTS.md always requires the old handbook.' },
-      { detail: 'The same testing guidance appears in both files.' },
-    ],
-    communication: communication({ permanentContextCost: 'The unconditional historical read adds repeated context on every task.' }),
+    evidence: ['AGENTS.md always requires the old handbook.', 'The same testing guidance appears in both files.'],
+    communication: communication({
+      permanentContextCost: 'The unconditional historical read adds repeated context on every task.',
+    }),
   },
   'mechanically-induced-reading': {
-    evidence: [
-      { detail: 'AGENTS.md says to read startup.md before every task.' },
-      { detail: 'ideas.md is explicitly optional and relevant-only.' },
-    ],
+    evidence: ['AGENTS.md says to read startup.md before every task.', 'ideas.md is explicitly optional and relevant-only.'],
     communication: communication({
       permanentBytes: 'The permanent AGENTS.md surface is short.',
       inducedReading: 'startup.md is mechanically required; ideas.md is not.',
     }),
   },
   'conflicting-current-and-historical-authority': {
-    evidence: [
-      { detail: 'old-plan.md is explicitly labeled superseded history.' },
-      { detail: 'No file establishes current architecture authority.' },
-    ],
+    evidence: ['old-plan.md is explicitly labeled superseded history.', 'No file establishes current architecture authority.'],
     communication: communication({
       facts: 'The current instructions mark old-plan.md as superseded.',
       authorityJudgment: 'Current architectural authority cannot be established with confidence.',
     }),
   },
   'solo-local-first-with-human-review': {
-    evidence: [
-      { detail: 'AGENTS.md identifies one maintainer.' },
-      { detail: 'The documented workflow runs tests locally.' },
-      { detail: 'The maintainer reviews before release.' },
-    ],
-    communication: communication({ rejectedRecommendationsSummary: 'Hosted controls and AI review are not justified.' }),
+    evidence: ['AGENTS.md identifies one maintainer.', 'The documented workflow runs tests locally.', 'The maintainer reviews before release.'],
+    communication: communication({
+      rejectedRecommendationsSummary: 'Hosted controls and AI review are not justified.',
+    }),
   },
   'material-technical-review-gap': {
-    evidence: [
-      { detail: 'The fixture drops and rebuilds customer_records.' },
-      { detail: 'The implementing agent certifies its own work.' },
-      { detail: 'No independent review step exists.' },
-    ],
+    evidence: ['The fixture drops and rebuilds customer_records.', 'The implementing agent certifies its own work.', 'No independent review step exists.'],
     communication: communication({
       riskJustification: 'Destructive migration risk justifies one lightweight independent check.',
       runtimeLimitations: 'A fresh context reduces shared reasoning but is not a security boundary.',
@@ -87,61 +65,36 @@ const scenarioPresentation = {
 
 const semanticOutputs = {
   'clean-repository': {
-    proposalTypes: [],
-    evidenceKinds: ['small-instruction-surface', 'human-review-present'],
-    rejectionTypes: ['add-hosted-control', 'expand-outside-audit-scope'],
+    proposals: [],
+    evidence: ['small-instruction-surface', 'human-review-present'],
+    rejections: ['add-hosted-control', 'expand-outside-audit-scope'],
   },
   'bloated-permanent-context': {
-    proposalTypes: ['reduce-permanent-context'],
-    evidenceKinds: ['unconditional-history-read', 'duplicated-instruction'],
-    rejectionTypes: ['replace-handbook', 'add-mandatory-generic-document'],
+    proposals: ['reduce-permanent-context'],
+    evidence: ['unconditional-history-read', 'duplicated-instruction'],
+    rejections: ['replace-handbook', 'add-mandatory-generic-document'],
   },
   'mechanically-induced-reading': {
-    proposalTypes: ['remove-unconditional-read'],
-    evidenceKinds: ['unconditional-startup-read', 'optional-reference'],
-    rejectionTypes: ['treat-optional-reference-as-required', 'add-canonical-document'],
+    proposals: ['remove-unconditional-read'],
+    evidence: ['unconditional-startup-read', 'optional-reference'],
+    rejections: ['treat-optional-reference-as-required', 'add-canonical-document'],
   },
   'conflicting-current-and-historical-authority': {
-    proposalTypes: ['clarify-current-authority'],
-    evidenceKinds: ['superseded-history', 'current-authority-unclear'],
-    rejectionTypes: ['infer-authority-from-filename', 'delete-history'],
+    proposals: ['clarify-current-authority'],
+    evidence: ['superseded-history', 'current-authority-unclear'],
+    rejections: ['infer-authority-from-filename', 'delete-history'],
   },
   'solo-local-first-with-human-review': {
-    proposalTypes: [],
-    evidenceKinds: ['single-maintainer', 'local-first-workflow', 'human-review-present'],
-    rejectionTypes: ['add-hosted-control', 'add-ai-review', 'add-hosted-service'],
+    proposals: [],
+    evidence: ['single-maintainer', 'local-first-workflow', 'human-review-present'],
+    rejections: ['add-hosted-control', 'add-ai-review', 'add-hosted-service'],
   },
   'material-technical-review-gap': {
-    proposalTypes: ['add-lightweight-independent-review'],
-    evidenceKinds: ['destructive-operation', 'same-context-certification', 'independent-review-absent'],
-    rejectionTypes: ['build-review-platform', 'claim-unverified-isolation'],
+    proposals: ['add-lightweight-independent-review'],
+    evidence: ['destructive-operation', 'same-context-certification', 'independent-review-absent'],
+    rejections: ['build-review-platform', 'claim-unverified-isolation'],
   },
 };
-
-function semanticResponse(scenarioId, expected, idPrefix) {
-  const semantics = semanticOutputs[scenarioId];
-  return {
-    decision: semantics.proposalTypes.length === 0 ? 'no-change' : 'changes-proposed',
-    proposedChanges: semantics.proposalTypes.map((type, index) => ({
-      id: `${idPrefix}-proposal-${index + 1}`,
-      type,
-    })),
-    rubricChecks: rubricKinds.map((kind, index) => ({
-      id: `${idPrefix}-rubric-${index + 1}`,
-      kind,
-    })),
-    evidence: semantics.evidenceKinds.map((kind, index) => ({
-      id: `${idPrefix}-evidence-${index + 1}`,
-      kind,
-      detail: expected.evidence[index].detail,
-    })),
-    deliberatelyRejectedRecommendations: semantics.rejectionTypes.map((type, index) => ({
-      id: `${idPrefix}-rejection-${index + 1}`,
-      type,
-    })),
-    communication: expected.communication,
-  };
-}
 
 function identifyScenario(guidance) {
   if (guidance.includes('# Agent handbook')) return 'bloated-permanent-context';
@@ -153,165 +106,93 @@ function identifyScenario(guidance) {
   return undefined;
 }
 
+function semanticResponse(scenarioId, presentation, prefix = 'fixture') {
+  const semantics = semanticOutputs[scenarioId];
+  return {
+    decision: semantics.proposals.length === 0 ? 'no-change' : 'changes-proposed',
+    proposedChanges: semantics.proposals.map((type, index) => ({
+      id: `${prefix}-proposal-${index + 1}`,
+      type,
+    })),
+    evidence: semantics.evidence.map((kind, index) => ({
+      id: `${prefix}-evidence-${index + 1}`,
+      kind,
+      detail: presentation.evidence[index],
+    })),
+    deliberatelyRejectedRecommendations: semantics.rejections.map((type, index) => ({
+      id: `${prefix}-rejection-${index + 1}`,
+      type,
+    })),
+    communication: presentation.communication,
+  };
+}
+
 function leaksOracle(scenarioId) {
-  return ['<scenario-contract>', 'outcomeContract', 'expectedDecision', 'exactProposalTypes',
+  return [
+    '<scenario-contract>', 'outcomeContract', 'expectedDecision', 'exactProposalTypes',
     'requiredAnyProposalTypes', 'forbiddenProposalTypes', 'exactRejectionTypes',
     'requiredRejectionTypes', 'requiredEvidenceKinds', 'mustDo', 'mustNotDo',
-    'communicationRequirements', scenarioId].some((text) => prompt.includes(text));
+    'communicationRequirements', scenarioId,
+  ].some((text) => prompt.includes(text));
+}
+
+function applyMode(response, scenarioId, presentation) {
+  if (mode === 'equivalent' && scenarioId === 'bloated-permanent-context') {
+    response = semanticResponse(scenarioId, presentation, 'alternate');
+    response.proposedChanges[0].type = 'remove-unconditional-read';
+    response.evidence = [{ id: 'alternate-evidence', kind: 'equivalent-observed-fact', detail: presentation.evidence[0] }];
+    response.deliberatelyRejectedRecommendations = [{ id: 'alternate-rejection', type: 'avoid-unnecessary-process' }];
+  }
+  if (mode === 'missing-required' && scenarioId === 'bloated-permanent-context') {
+    response.proposedChanges[0].type = 'clarify-current-authority';
+  }
+  if (mode === 'forbidden' && scenarioId === 'solo-local-first-with-human-review') {
+    response.decision = 'changes-proposed';
+    response.proposedChanges = [{ id: 'forbidden-proposal', type: 'add-ai-review' }];
+  }
+  if (mode === 'too-many' && scenarioId === 'clean-repository') {
+    response.decision = 'changes-proposed';
+    response.proposedChanges = [{ id: 'unearned-change', type: 'add-hosted-control' }];
+  }
+  if (mode === 'missing-communication' && scenarioId === 'mechanically-induced-reading') {
+    response.communication.inducedReading = '';
+  }
+  if (mode === 'bounded-diagnostic' && scenarioId === 'clean-repository') {
+    response.decision = 'changes-proposed';
+    response.proposedChanges = Array.from({ length: 100 }, (_, index) => ({
+      id: `diagnostic-package-${index + 1}`,
+      type: index % 2 === 0 ? 'add-hosted-control' : 'clarify-current-authority',
+    }));
+    response.evidence[0].detail = 'PRIVATE-DIAGNOSTIC-SENTINEL';
+    response.communication.mainTakeaway = 'PRIVATE-DIAGNOSTIC-SENTINEL';
+    response.deliberatelyRejectedRecommendations = [{ id: 'private-rejection', type: 'PRIVATE-DIAGNOSTIC-SENTINEL' }];
+  }
+  if (mode === 'duplicate-id' && scenarioId === 'clean-repository') {
+    response.deliberatelyRejectedRecommendations.push({ ...response.deliberatelyRejectedRecommendations[0] });
+  }
+  return response;
 }
 
 if (!repository || !outputPath || !schemaPath || !prompt) {
   process.exitCode = 2;
 } else {
   const scenarioId = identifyScenario(await readFile(join(repository, 'AGENTS.md'), 'utf8'));
-  const expected = scenarioPresentation[scenarioId];
-  if (!expected) {
+  const presentation = scenarioPresentation[scenarioId];
+  if (!presentation) {
     process.exitCode = 2;
   } else {
-    let response = semanticResponse(scenarioId, expected, `fixture-${scenarioId}`);
-    const mode = process.env.KEEL_FAKE_CODEX_MODE;
-    if (mode === 'alternate-trace-ids') {
-      response = semanticResponse(scenarioId, expected, `alternate-${scenarioId}`);
-    }
-    if (mode === 'wrong-semantic-type') {
-      response = semanticResponse(scenarioId, expected, `wrong-${scenarioId}`);
-      if (scenarioId === 'solo-local-first-with-human-review') {
-        response.proposedChanges = [{ id: 'wrong-solo-proposal', type: 'add-ai-review' }];
-      }
-    }
-    if (scenarioId === 'clean-repository' && mode === 'extra-valid-evidence-first') {
-      response.evidence.push({
-        id: 'extra-valid-local-workflow',
-        kind: 'local-first-workflow',
-        detail: 'AGENTS.md directs contributors to run node --test before handoff.',
-      });
-    }
-    if (scenarioId === 'clean-repository' && mode === 'missing-required-evidence-first') {
-      response.evidence.shift();
-    }
-    if (scenarioId === 'clean-repository' && mode === 'unknown-evidence-first') {
-      response.evidence.push({
-        id: 'unknown-evidence',
-        kind: 'fabricated-evidence-kind',
-        detail: 'This semantic kind is outside the universal catalog.',
-      });
-    }
-    if (scenarioId === 'clean-repository' && mode === 'extra-valid-rejection-first') {
-      response.deliberatelyRejectedRecommendations.push({
-        id: 'extra-valid-ai-review-rejection',
-        type: 'add-ai-review',
-      });
-    }
-    if (scenarioId === 'clean-repository' && mode === 'clean-equivalent-outcome') {
-      response.deliberatelyRejectedRecommendations = [
-        { id: 'equivalent-hosted-rejection', type: 'add-hosted-service' },
-        { id: 'equivalent-document-rejection', type: 'add-mandatory-generic-document' },
-      ];
-    }
-    if (scenarioId === 'clean-repository' && mode === 'missing-required-rejection-first') {
-      response.deliberatelyRejectedRecommendations.shift();
-    }
-    if (scenarioId === 'clean-repository' && mode === 'unknown-rejection-first') {
-      response.deliberatelyRejectedRecommendations.push({
-        id: 'unknown-rejection',
-        type: 'fabricated-rejection-type',
-      });
-    }
-    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-remove-unconditional-read') {
-      response.proposedChanges = [{
-        id: 'remove-unconditional-history-read',
-        type: 'remove-unconditional-read',
-      }];
-    }
-    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-equivalent-outcome') {
-      response.proposedChanges = [{
-        id: 'remove-unconditional-history-read',
-        type: 'remove-unconditional-read',
-      }];
-      response.evidence = [{
-        id: 'equivalent-context-evidence',
-        kind: 'unconditional-startup-read',
-        detail: expected.evidence[0].detail,
-      }];
-      response.deliberatelyRejectedRecommendations = [{
-        id: 'equivalent-document-rejection',
-        type: 'add-canonical-document',
-      }];
-    }
-    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-unrelated-proposal') {
-      response.proposedChanges = [{
-        id: 'unrelated-authority-change',
-        type: 'clarify-current-authority',
-      }];
-    }
-    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-forbidden-proposal') {
-      response.proposedChanges = [{
-        id: 'forbidden-handbook-replacement',
-        type: 'replace-handbook',
-      }];
-    }
-    if (scenarioId === 'mechanically-induced-reading' && mode === 'induced-equivalent-context-reduction') {
-      response.proposedChanges = [{
-        id: 'reduce-mechanically-induced-context',
-        type: 'reduce-permanent-context',
-      }];
-    }
-    if (scenarioId === 'mechanically-induced-reading' && mode === 'missing-outcome-communication') {
-      response.communication.inducedReading = '';
-    }
-    if (
-      scenarioId === 'conflicting-current-and-historical-authority'
-      && mode === 'authority-equivalent-outcome'
-    ) {
-      response.evidence = [{
-        id: 'equivalent-authority-evidence',
-        kind: 'superseded-history',
-        detail: expected.evidence[0].detail,
-      }];
-      response.deliberatelyRejectedRecommendations = [{
-        id: 'equivalent-preservation-rejection',
-        type: 'replace-handbook',
-      }];
-    }
-    if (scenarioId === 'clean-repository' && mode === 'hang-first') {
+    let response = applyMode(semanticResponse(scenarioId, presentation), scenarioId, presentation);
+
+    if (scenarioId === 'clean-repository' && mode === 'hang') {
       process.on('SIGTERM', () => {});
       await appendFile(process.env.KEEL_FAKE_CODEX_LOG, `${JSON.stringify({
         args: args.slice(0, -1), repository, pid: process.pid, promptProvided: true,
         promptLeaksOracle: leaksOracle(scenarioId),
       })}\n`);
       await new Promise(() => setInterval(() => {}, 60_000));
-    }
-    if (scenarioId === 'clean-repository' && mode === 'malformed-first') {
+    } else if (scenarioId === 'clean-repository' && mode === 'malformed') {
       await writeFile(outputPath, 'not json\n');
     } else {
-      if (scenarioId === 'clean-repository' && mode === 'missing-rubric-first') response.rubricChecks.shift();
-      if (scenarioId === 'clean-repository' && mode === 'too-many-first') {
-        response.decision = 'changes-proposed';
-        response.proposedChanges = [{ id: 'unearned-change', type: 'add-hosted-control' }];
-      }
-      if (scenarioId === 'clean-repository' && mode === 'bounded-semantic-diagnostic-first') {
-        response.decision = 'changes-proposed';
-        response.proposedChanges = Array.from({ length: 100 }, (_, index) => ({
-          id: `diagnostic-package-${index + 1}`,
-          type: index % 2 === 0 ? 'add-hosted-control' : 'clarify-current-authority',
-        }));
-        response.evidence[0].detail = 'PRIVATE-DIAGNOSTIC-SENTINEL';
-        response.communication.mainTakeaway = 'PRIVATE-DIAGNOSTIC-SENTINEL';
-        response.deliberatelyRejectedRecommendations = [{
-          id: 'private-rejection',
-          type: 'PRIVATE-DIAGNOSTIC-SENTINEL',
-        }];
-      }
-      if (scenarioId === 'clean-repository' && mode === 'duplicate-rejection-first') {
-        const first = response.deliberatelyRejectedRecommendations[0];
-        response.deliberatelyRejectedRecommendations = [
-          first,
-          { ...first },
-        ];
-      }
-      if (scenarioId === 'solo-local-first-with-human-review' && mode === 'forbidden-solo-proposal') {
-        response.proposedChanges = [{ id: 'install-independent-ai-review', type: 'add-ai-review' }];
-      }
       await writeFile(outputPath, `${JSON.stringify(response)}\n`);
     }
 
@@ -322,9 +203,13 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
     try { await access(join(repository, 'AGENTS.md')); } catch { fixtureInstalled = false; }
     try {
       const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
-      schemaValid = schema.required.includes('decision')
-        && schema.required.includes('rubricChecks')
-        && schema.additionalProperties === false;
+      schemaValid = JSON.stringify([...schema.required].sort()) === JSON.stringify([
+        'communication',
+        'decision',
+        'deliberatelyRejectedRecommendations',
+        'evidence',
+        'proposedChanges',
+      ].sort()) && schema.additionalProperties === false;
     } catch { schemaValid = false; }
     const repositoryIsClean = execFileSync(
       'git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' },

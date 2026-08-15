@@ -85,6 +85,7 @@ test('README follows the beginner-first progressive heading order', async () => 
     '## Who Keel is for',
     '## What Keel can help with',
     '## The simple idea',
+    '## How Keel differs from a linter',
     '## Before Keel / After Keel',
     '## What Keel does not assume',
     '## How Keel works',
@@ -174,12 +175,43 @@ test('README contains canonical clone, complete-directory install, audit, and sc
   const readme = await loadReadme();
   assert.match(readme, /git clone https:\/\/github\.com\/fahmed9446-code\/keel\.git/);
   assert.match(readme, /\ncd keel\n/);
+  assert.match(readme, /individual[^.]*install Keel once[^.]*user/i);
+  assert.match(readme, /\$HOME\/\.agents\/skills/);
+  assert.match(readme, /project-level[^.]*multiple contributors|multiple contributors[^.]*project-level/is);
   assert.match(readme, /cp -R skills\/building-agent-harness \/path\/to\/project\/\.agents\/skills\//);
   assert.match(readme, /cp -R skills\/building-agent-harness \/path\/to\/project\/\.claude\/skills\//);
   assert.match(readme, /cp -R skills\/building-agent-harness \/path\/to\/project\/\.gemini\/skills\//);
   assert.match(readme, /Use building-agent-harness to audit this repository/i);
   assert.match(readme, /node skills\/building-agent-harness\/scripts\/scan-repo\.mjs --root \/path\/to\/project/);
   assert.match(readme, /npm test/);
+});
+
+test('README distinguishes adaptive judgment from linting and bounds measured effects', async () => {
+  const readme = await loadReadme();
+  const linterSection = readme.slice(
+    readme.indexOf('## How Keel differs from a linter'),
+    readme.indexOf('## Before Keel / After Keel'),
+  );
+  assert.match(linterSection, /Linters are useful/i);
+  assert.match(linterSection, /different layer/i);
+  assert.match(linterSection, /No meaningful changes required/);
+  assert.doesNotMatch(linterSection, /better than|superior|competitor/i);
+
+  assert.match(readme, /Measured repository effects/i);
+  assert.match(readme, /deterministic fact/i);
+  assert.match(readme, /semantic judgment/i);
+  assert.match(readme, /not[^.]*token[^.]*cost[^.]*speed|does not[^.]*token[^.]*cost[^.]*performance/is);
+});
+
+test('README describes the durable behavior runner without remediation history', async () => {
+  const readme = await loadReadme();
+  const development = readme.slice(readme.indexOf('## Development'), readme.indexOf('## Privacy'));
+  assert.match(development, /`npm test`[^.]*deterministic[^.]*offline/i);
+  assert.match(development, /`npm run test:behavior`[^.]*opt-in[^.]*live/i);
+  assert.match(development, /required[^.]*forbidden[^.]*outcomes/i);
+  assert.match(development, /bounded semantic diagnostics/i);
+  assert.match(development, /not a model benchmark/i);
+  assert.doesNotMatch(development, /alias|breaker|diagnostic cycle|historical live-run/i);
 });
 
 test('README keeps scanner schema 2 and state schema 2 claims consistent with public contracts', async () => {
@@ -234,7 +266,7 @@ test('package remains dependency-free and top-level contents stay bounded', asyn
   assert.equal(manifest.devDependencies, undefined);
   assert.equal(manifest.license, 'Apache-2.0');
   const entries = (await readdir(root))
-    .filter((name) => !['.git', '.superpowers'].includes(name))
+    .filter((name) => name !== '.git')
     .sort();
   assert.deepEqual(entries, ['.gitignore', 'LICENSE', 'README.md', 'package.json', 'skills', 'tests']);
 });
