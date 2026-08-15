@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { promisify } from 'node:util';
 
@@ -11,6 +11,7 @@ const installationContractUrl = new URL(
   '../skills/building-agent-harness/references/installation-contract.md',
   import.meta.url,
 );
+const workflowUrl = new URL('../.github/workflows/deterministic-tests.yml', import.meta.url);
 
 async function loadReadme() {
   return readFile(readmeUrl, 'utf8');
@@ -166,6 +167,13 @@ test('benefit claim audit rejects prohibited positive outcome claims', () => {
   }
 });
 
+test('benefit claim audit allows raw measured repository facts', () => {
+  const readme = benefitClaimFixture(
+    'Always-loaded instruction surface: 14.2 KB across 4 files → 3.1 KB across 1 file.',
+  );
+  assert.doesNotThrow(() => assertRestrainedBenefitClaims(readme));
+});
+
 test('README preserves accurate support tiers and their limitations', async () => {
   const readme = await loadReadme();
   assert.match(readme, /methodology is shared[^.]*native mechanics differ/i);
@@ -204,6 +212,10 @@ test('README distinguishes adaptive judgment from linting and bounds measured ef
   assert.match(readme, /deterministic fact/i);
   assert.match(readme, /semantic judgment/i);
   assert.match(readme, /not[^.]*token[^.]*cost[^.]*speed|does not[^.]*token[^.]*cost[^.]*performance/is);
+  assert.match(
+    readme,
+    /Example — illustrative values[\s\S]*Current measured fact:[\s\S]*Measured before → after[\s\S]*approved and validated cleanup/i,
+  );
 });
 
 test('README describes the durable behavior runner without remediation history', async () => {
@@ -214,6 +226,7 @@ test('README describes the durable behavior runner without remediation history',
   assert.match(development, /required[^.]*forbidden[^.]*outcomes/i);
   assert.match(development, /bounded semantic diagnostics/i);
   assert.match(development, /not a model benchmark/i);
+  assert.match(development, /Keel's public repository[^.]*GitHub[^.]*deterministic/i);
   assert.doesNotMatch(development, /alias|breaker|diagnostic cycle|historical live-run/i);
 });
 
@@ -228,7 +241,7 @@ test('README keeps scanner schema 2 and state schema 2 claims consistent with pu
   assert.ok(stateMatch, 'installation contract must contain a state example');
   const state = JSON.parse(stateMatch[1]);
 
-  assert.equal(manifest.version, '1.0.1');
+  assert.equal(manifest.version, '1.0.2');
   assert.equal(state.schemaVersion, 2);
   assert.equal(state.keelVersion, manifest.version);
   assert.match(readme, /scanner schema 2/i);
@@ -270,5 +283,20 @@ test('package remains dependency-free and top-level contents stay bounded', asyn
   assert.equal(manifest.license, 'Apache-2.0');
   const { stdout } = await execFileAsync('git', ['ls-files'], { cwd: root });
   const entries = [...new Set(stdout.trim().split('\n').map((path) => path.split('/')[0]))].sort();
-  assert.deepEqual(entries, ['.gitignore', 'LICENSE', 'README.md', 'package.json', 'skills', 'tests']);
+  assert.deepEqual(entries, ['.github', '.gitignore', 'LICENSE', 'README.md', 'package.json', 'skills', 'tests']);
+});
+
+test('single GitHub workflow runs only the deterministic suite with read-only permissions', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  const workflowFiles = await readdir(new URL('../.github/workflows/', import.meta.url));
+  assert.deepEqual(workflowFiles, ['deterministic-tests.yml']);
+  assert.match(workflow, /^permissions:\n  contents: read$/m);
+  assert.match(workflow, /push:\n\s+branches: \[main\]/);
+  assert.match(workflow, /pull_request:\n\s+branches: \[main\]/);
+  assert.match(workflow, /uses: actions\/checkout@v7/);
+  assert.match(workflow, /uses: actions\/setup-node@v7/);
+  assert.match(workflow, /node-version: 22/);
+  assert.match(workflow, /package-manager-cache: false/);
+  assert.match(workflow, /run: npm test/);
+  assert.doesNotMatch(workflow, /test:behavior|secret|permissions:[\s\S]*write|schedule:|matrix:|upload-artifact/i);
 });

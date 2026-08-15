@@ -198,9 +198,15 @@ Dirty working-copy content, untracked content, and ignored content are explicit 
 
 ### Measured repository effects
 
-When complete before-and-after evidence exists, Keel may report modest deterministic facts already present in scanner output: the count of instruction-file candidates, the count of mechanically recognized references, and exact snapshot bytes for referenced files whose sizes are present. The skill still makes the semantic judgment about which candidates are actually always loaded, duplicated, or authoritative.
+When complete evidence and native-mechanics judgment support it, Keel may report deterministic facts about repository mechanics:
 
-If evidence is incomplete or truncated, Keel omits the affected measurement. These repository facts are not measurements of model token use, cost, speed, correctness, or task performance, and Keel does not translate them into such claims.
+> **Example — illustrative values**
+>
+> Current measured fact: identified always-loaded instruction surface — 14.2 KB across 4 files
+>
+> Measured before → after following an approved and validated cleanup: 14.2 KB across 4 files → 3.1 KB across 1 file
+
+It may also report supported reference counts or snapshot bytes. The skill's semantic judgment decides meaning; incomplete or truncated facts are omitted. These facts do not measure tokens, cost, speed, correctness, or performance.
 
 ### Output and classification
 
@@ -259,13 +265,15 @@ npm test
 node skills/building-agent-harness/scripts/scan-repo.mjs --root .
 ```
 
-`npm test` is deterministic, offline, and independent of Codex authentication. It covers scanner schema and limits, sensitive-path handling, zero target mutation, skill discovery, state restraint, uninstall safety, and the behavior runner's local contract.
+`npm test` is deterministic, offline, and independent of Codex authentication. It covers the scanner, skill, state/uninstall, README, and local behavior-runner contracts.
+
+Keel's public repository uses GitHub for this deterministic suite; that repository-specific choice does not imply audited repositories need hosted CI.
 
 ```bash
 npm run test:behavior
 ```
 
-`npm run test:behavior` is an opt-in live reasoning regression suite. Its six scenarios check observable required and forbidden outcomes, package limits, evidence, communication, deliberate rejections, process freshness, and cleanup. Bounded semantic diagnostics explain failures without retaining raw prompts, transcripts, repository content, or private response text. The scenarios are regression contracts, not a model benchmark.
+`npm run test:behavior` is an opt-in live reasoning regression suite, not a model benchmark. Six scenarios check observable required and forbidden outcomes, package limits, evidence, communication, deliberate rejections, freshness, and cleanup. Bounded semantic diagnostics explain failures without retaining raw prompts, transcripts, repository content, or private response text.
 
 ## Privacy
 

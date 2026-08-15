@@ -11,6 +11,11 @@ const outputPath = valueAfter('--output-last-message');
 const schemaPath = valueAfter('--output-schema');
 const prompt = args.at(-1);
 const mode = process.env.KEEL_FAKE_CODEX_MODE ?? 'pass';
+
+if (args.length === 1 && args[0] === '--version') {
+  process.stdout.write('fake-codex 1.0.0\n');
+  process.exit(0);
+}
 const communicationFields = [
   'mainTakeaway', 'technicalEvidence', 'permanentContextCost', 'permanentBytes',
   'inducedReading', 'facts', 'authorityJudgment', 'rejectedRecommendationsSummary',
@@ -183,7 +188,9 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
   } else {
     let response = applyMode(semanticResponse(scenarioId, presentation), scenarioId, presentation);
 
-    if (scenarioId === 'clean-repository' && mode === 'hang') {
+    if (scenarioId === 'clean-repository' && mode === 'post-preflight-failure') {
+      process.exit(17);
+    } else if (scenarioId === 'clean-repository' && mode === 'hang') {
       process.on('SIGTERM', () => {});
       await appendFile(process.env.KEEL_FAKE_CODEX_LOG, `${JSON.stringify({
         args: args.slice(0, -1), repository, pid: process.pid, promptProvided: true,

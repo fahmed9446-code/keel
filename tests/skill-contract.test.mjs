@@ -60,6 +60,18 @@ test('skill fixes the user-facing report order', async () => {
   }
 });
 
+test('skill reports only supported measured repository facts without turning them into outcomes', async () => {
+  const skill = await loadSkill();
+  assert.match(skill, /measured repository facts/i);
+  assert.match(skill, /complete evidence/i);
+  assert.match(skill, /current measured fact/i);
+  assert.match(skill, /projected mechanical effect/i);
+  assert.match(skill, /measured before → after/i);
+  assert.match(skill, /No meaningful changes required/);
+  assert.match(skill, /not[^.]*token[^.]*cost[^.]*speed[^.]*correctness/i);
+  assert.match(skill, /no threshold|do not.*threshold/i);
+});
+
 test('scenario suite is capped at six pass-fail contracts', async () => {
   const scenarios = JSON.parse(await readFile(scenariosUrl, 'utf8'));
   assert.equal(scenarios.benchmark, false);

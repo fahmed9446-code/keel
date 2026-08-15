@@ -11,6 +11,7 @@ const scenariosPath = join(projectRoot, 'tests/scenarios.json');
 const fixturesRoot = join(projectRoot, 'tests/fixtures/behavior-scenarios');
 const skillSource = join(projectRoot, 'skills/building-agent-harness');
 const codexBinary = process.env.KEEL_BEHAVIOR_CODEX_BIN || 'codex';
+const gitBinary = process.env.KEEL_BEHAVIOR_GIT_BIN || 'git';
 const manifest = JSON.parse(await readFile(scenariosPath, 'utf8'));
 const communicationFields = [
   'mainTakeaway',
@@ -244,6 +245,23 @@ function run(command, args, options = {}) {
   });
 }
 
+async function unavailablePrerequisites() {
+  const checks = [
+    { label: 'Git', command: gitBinary, args: ['--version'], env: isolatedGitEnvironment() },
+    { label: 'Codex CLI', command: codexBinary, args: ['--version'], env: process.env },
+  ];
+  const unavailable = [];
+  for (const check of checks) {
+    try {
+      const result = await run(check.command, check.args, { env: check.env, timeoutMs: 10_000 });
+      if (result.code !== 0 || result.signal || result.timedOut) unavailable.push(`${check.label} unavailable`);
+    } catch (error) {
+      unavailable.push(error?.code === 'ENOENT' ? `${check.label} not found` : `${check.label} unavailable`);
+    }
+  }
+  return unavailable;
+}
+
 function requireAnyProposalType(actual, requiredAny) {
   if (new Set(actual).size !== actual.length) throw new Error('proposal types must be unique');
   if (!requiredAny.some((type) => actual.includes(type))) {
@@ -441,7 +459,7 @@ async function runScenario(scenario) {
     await copyDirectoryContents(join(fixturesRoot, scenario.id), repository);
     const gitEnvironment = isolatedGitEnvironment();
     requireRunning();
-    const gitResult = await run('git', ['init', '--quiet', '--template='], {
+    const gitResult = await run(gitBinary, ['init', '--quiet', '--template='], {
       cwd: repository,
       env: gitEnvironment,
       timeoutMs: 10_000,
@@ -469,7 +487,7 @@ async function runScenario(scenario) {
       ],
     ]) {
       requireRunning();
-      const gitSetup = await run('git', args, {
+      const gitSetup = await run(gitBinary, args, {
         cwd: repository,
         env: gitEnvironment,
         timeoutMs: 10_000,
@@ -525,31 +543,36 @@ async function runScenario(scenario) {
   }
 }
 
-let passed = 0;
-
-for (const scenario of manifest.scenarios) {
-  if (shuttingDown) break;
-  const scenarioTask = runScenario(scenario);
-  activeScenarioTasks.add(scenarioTask);
-  try {
-    await scenarioTask;
-    passed += 1;
-    console.log(`PASS ${scenario.id}`);
-  } catch (error) {
-    if (!shuttingDown) {
-      console.log(`FAIL ${scenario.id}: ${error.message}`);
-      console.log(diagnosticLine(
-        scenario,
-        error.semanticDiagnostic ?? unavailableSemanticDiagnostic(scenario),
-      ));
+const unavailable = await unavailablePrerequisites();
+if (unavailable.length > 0) {
+  console.log(`UNAVAILABLE behavior prerequisites: ${unavailable.join(', ')}`);
+  process.exitCode = 2;
+} else {
+  let passed = 0;
+  for (const scenario of manifest.scenarios) {
+    if (shuttingDown) break;
+    const scenarioTask = runScenario(scenario);
+    activeScenarioTasks.add(scenarioTask);
+    try {
+      await scenarioTask;
+      passed += 1;
+      console.log(`PASS ${scenario.id}`);
+    } catch (error) {
+      if (!shuttingDown) {
+        console.log(`FAIL ${scenario.id}: ${error.message}`);
+        console.log(diagnosticLine(
+          scenario,
+          error.semanticDiagnostic ?? unavailableSemanticDiagnostic(scenario),
+        ));
+      }
+    } finally {
+      activeScenarioTasks.delete(scenarioTask);
     }
-  } finally {
-    activeScenarioTasks.delete(scenarioTask);
   }
-}
 
-if (!shuttingDown) {
-  const allPassed = passed === manifest.scenarios.length;
-  console.log(`${allPassed ? 'PASS' : 'FAIL'} ${passed}/${manifest.scenarios.length} behavior scenarios`);
-  if (!allPassed) process.exitCode = 1;
+  if (!shuttingDown) {
+    const allPassed = passed === manifest.scenarios.length;
+    console.log(`${allPassed ? 'PASS' : 'FAIL'} ${passed}/${manifest.scenarios.length} behavior scenarios`);
+    if (!allPassed) process.exitCode = 1;
+  }
 }

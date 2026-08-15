@@ -50,6 +50,10 @@ Render these sections in order:
 7. **Review-independence / control-plane assessment** — include only when material.
 8. **Limitations and technical evidence** — keep detail available without burying the decision.
 
+In **Before → after**, add compact **Measured repository facts** only with complete evidence. Label each as a **current measured fact**, a **projected mechanical effect** derived from exact proposed edits, or **measured before → after** after validated installation while pre-install evidence remains. Report only supported instruction or persistent-surface counts and bytes, or mechanically recognized reference counts and snapshot bytes, after native mechanics support the semantic classification; omit incomplete measurements.
+
+Numbers are evidence, not findings, thresholds, scores, or pressure against **No meaningful changes required**. They are not measurements of tokens, cost, speed, or correctness; do not translate them into model or product outcomes. Use no threshold to decide that a number is bad.
+
 ## Quick reference
 
 | Situation | Response |

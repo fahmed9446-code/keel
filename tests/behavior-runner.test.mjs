@@ -22,10 +22,10 @@ async function runWithFake(mode = 'pass', extraEnv = {}) {
       cwd: rootPath,
       env: {
         ...process.env,
-        ...extraEnv,
         KEEL_BEHAVIOR_CODEX_BIN: fakeCodexPath,
         KEEL_FAKE_CODEX_LOG: logPath,
         KEEL_FAKE_CODEX_MODE: mode,
+        ...extraEnv,
       },
     });
     return { ...result, logPath, scratch };
@@ -126,6 +126,47 @@ test('runner executes six isolated read-only scenarios without exposing the orac
     }
   } finally {
     await cleanupRun(run);
+  }
+});
+
+test('runner distinguishes completed behavior results from unavailable prerequisites', async (t) => {
+  const missingBinary = join(tmpdir(), 'keel-prerequisite-does-not-exist');
+  const cases = [
+    { name: 'all pass', mode: 'pass', env: {}, exitCode: undefined, summary: 'PASS 6/6 behavior scenarios' },
+    { name: 'behavior failure', mode: 'forbidden', env: {}, exitCode: 1, summary: 'FAIL 5/6 behavior scenarios' },
+    {
+      name: 'post-preflight invocation failure', mode: 'post-preflight-failure', env: {},
+      exitCode: 1, summary: 'FAIL 5/6 behavior scenarios',
+    },
+    {
+      name: 'Codex unavailable', mode: 'pass',
+      env: { KEEL_BEHAVIOR_CODEX_BIN: missingBinary }, exitCode: 2,
+      summary: 'UNAVAILABLE behavior prerequisites: Codex CLI not found',
+    },
+    {
+      name: 'Git unavailable', mode: 'pass',
+      env: { KEEL_BEHAVIOR_GIT_BIN: missingBinary }, exitCode: 2,
+      summary: 'UNAVAILABLE behavior prerequisites: Git not found',
+    },
+  ];
+  for (const expectation of cases) {
+    await t.test(expectation.name, async () => {
+      const run = await runWithFake(expectation.mode, expectation.env);
+      try {
+        assert.equal(run.exitCode, expectation.exitCode, run.stdout);
+        assert.match(run.stdout, new RegExp(`^${expectation.summary}$`, 'm'));
+        if (expectation.name === 'post-preflight invocation failure') {
+          assert.match(run.stdout, /^FAIL clean-repository: codex exited 17$/m);
+          assert.doesNotMatch(run.stdout, /^UNAVAILABLE behavior prerequisites:/m);
+        }
+        if (expectation.exitCode === 2) {
+          assert.doesNotMatch(run.stdout, /^(?:PASS|FAIL) \d+\/6 behavior scenarios$/m);
+          await assert.rejects(access(run.logPath));
+        }
+      } finally {
+        await cleanupRun(run);
+      }
+    });
   }
 });
 
