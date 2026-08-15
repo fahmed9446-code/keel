@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { access, readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 const root = new URL('../', import.meta.url);
+const execFileAsync = promisify(execFile);
 const readmeUrl = new URL('../README.md', import.meta.url);
 const installationContractUrl = new URL(
   '../skills/building-agent-harness/references/installation-contract.md',
@@ -265,8 +268,7 @@ test('package remains dependency-free and top-level contents stay bounded', asyn
   assert.equal(manifest.dependencies, undefined);
   assert.equal(manifest.devDependencies, undefined);
   assert.equal(manifest.license, 'Apache-2.0');
-  const entries = (await readdir(root))
-    .filter((name) => name !== '.git')
-    .sort();
+  const { stdout } = await execFileAsync('git', ['ls-files'], { cwd: root });
+  const entries = [...new Set(stdout.trim().split('\n').map((path) => path.split('/')[0]))].sort();
   assert.deepEqual(entries, ['.gitignore', 'LICENSE', 'README.md', 'package.json', 'skills', 'tests']);
 });
