@@ -156,7 +156,7 @@ test('runner keeps scenario-specific expected answers out of the Codex prompt', 
   }
 });
 
-test('runner rejects duplicate rejected IDs that omit a required rejection', async () => {
+test('runner requires unique trace IDs for deliberately rejected recommendations', async () => {
   const run = await runWithFake('duplicate-rejection-first');
   try {
     assert.equal(run.exitCode, 1);
@@ -167,7 +167,7 @@ test('runner rejects duplicate rejected IDs that omit a required rejection', asy
   }
 });
 
-test('runner allows additional unique rejection types from the universal catalog', async () => {
+test('runner allows additional unique rejected-recommendation labels', async () => {
   const run = await runWithFake('extra-valid-rejection-first');
   try {
     assert.equal(run.exitCode, undefined, run.stdout);
@@ -177,26 +177,59 @@ test('runner allows additional unique rejection types from the universal catalog
   }
 });
 
-test('runner rejects a response missing a required rejection type', async () => {
+test('runner judges scenarios by observable outcomes rather than exact evidence or rejection shapes', async () => {
+  for (const mode of [
+    'clean-equivalent-outcome',
+    'bloated-equivalent-outcome',
+    'authority-equivalent-outcome',
+  ]) {
+    const run = await runWithFake(mode);
+    try {
+      assert.equal(run.exitCode, undefined, `${mode}: ${run.stdout}`);
+      assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+    } finally {
+      await cleanupRun(run);
+    }
+  }
+});
+
+test('scenario oracle exposes only must-do, must-not-do, and maximum-package outcome checks', async () => {
+  const manifest = JSON.parse(await readFile(scenariosUrl, 'utf8'));
+  const forbiddenShapeFields = [
+    'allowedProposalTypes',
+    'exactProposalTypes',
+    'requiredAnyProposalTypes',
+    'requiredRejectionTypes',
+    'requiredEvidenceKinds',
+    'requiredCommunicationFields',
+    'communicationPrefixes',
+  ];
+
+  for (const scenario of manifest.scenarios) {
+    assert.deepEqual(Object.keys(scenario.outcomeContract).sort(), [
+      'maximumProposedChangePackages',
+      'mustDo',
+      'mustNotDo',
+    ]);
+    for (const field of forbiddenShapeFields) assert.equal(field in scenario, false, `${scenario.id}: ${field}`);
+  }
+});
+
+test('runner does not require an exact rejected-recommendation list', async () => {
   const run = await runWithFake('missing-required-rejection-first');
   try {
-    assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL clean-repository: rejection types do not match the scenario contract$/m);
-    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
   } finally {
     await cleanupRun(run);
   }
 });
 
-test('runner rejects a rejection type outside the universal catalog', async () => {
+test('runner accepts semantically phrased rejection labels outside a fixed catalog', async () => {
   const run = await runWithFake('unknown-rejection-first');
   try {
-    assert.equal(run.exitCode, 1);
-    assert.match(
-      run.stdout,
-      /^FAIL clean-repository: rejection type is not in the universal catalog fabricated-rejection-type$/m,
-    );
-    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
   } finally {
     await cleanupRun(run);
   }
@@ -214,9 +247,33 @@ test('runner accepts either valid proposal alternative for bloated permanent con
   }
 });
 
-test('runner rejects unrelated and forbidden proposals for bloated permanent context', async () => {
+test('runner accepts equivalent context-reduction outcomes for mechanically induced reading', async () => {
+  const run = await runWithFake('induced-equivalent-context-reduction');
+  try {
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner enforces observable must-do communication dimensions without matching wording', async () => {
+  const run = await runWithFake('missing-outcome-communication');
+  try {
+    assert.equal(run.exitCode, 1, run.stdout);
+    assert.match(
+      run.stdout,
+      /^FAIL mechanically-induced-reading: must-do communication field is missing inducedReading$/m,
+    );
+    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
+test('runner rejects a missing required outcome and a forbidden outcome for bloated permanent context', async () => {
   for (const [mode, message] of [
-    ['bloated-unrelated-proposal', 'proposal type is not allowed clarify-current-authority'],
+    ['bloated-unrelated-proposal', 'proposal types do not match the scenario contract'],
     ['bloated-forbidden-proposal', 'proposal type is forbidden replace-handbook'],
   ]) {
     const run = await runWithFake(mode);
@@ -261,23 +318,21 @@ test('runner allows additional evidence kinds from the universal catalog', async
   }
 });
 
-test('runner rejects a response missing a required evidence kind', async () => {
+test('runner accepts different non-empty evidence selections for the same observable outcome', async () => {
   const run = await runWithFake('missing-required-evidence-first');
   try {
-    assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL clean-repository: evidence kinds do not match the scenario contract$/m);
-    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
   } finally {
     await cleanupRun(run);
   }
 });
 
-test('runner rejects an evidence kind outside the universal catalog', async () => {
+test('runner accepts concise evidence labels outside a fixed semantic catalog', async () => {
   const run = await runWithFake('unknown-evidence-first');
   try {
-    assert.equal(run.exitCode, 1);
-    assert.match(run.stdout, /^FAIL clean-repository: evidence kind is not in the universal catalog fabricated-evidence-kind$/m);
-    assert.match(run.stdout, /^FAIL 5\/6 behavior scenarios$/m);
+    assert.equal(run.exitCode, undefined, run.stdout);
+    assert.match(run.stdout, /^PASS 6\/6 behavior scenarios$/m);
   } finally {
     await cleanupRun(run);
   }

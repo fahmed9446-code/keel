@@ -7,96 +7,88 @@
       "id": "clean-repository",
       "mustDo": ["Recognize the healthy, intentionally small instruction architecture", "Return No meaningful changes required when no action earns its cost"],
       "mustNotDo": ["Invent CI, skills, documentation, invariants, or command contracts outside the audit scope", "Treat the absence of unrelated product files as an agent-harness defect"],
-      "maximumProposedChangePackages": 0,
-      "expectedDecision": "no-change",
-      "allowedProposalTypes": [],
-      "exactProposalTypes": [],
-      "forbiddenProposalTypes": ["add-hosted-control", "expand-outside-audit-scope"],
-      "requiredRejectionTypes": ["add-hosted-control", "expand-outside-audit-scope"],
-      "requiredEvidenceKinds": ["small-instruction-surface", "human-review-present"],
-      "requiredCommunicationFields": ["mainTakeaway", "technicalEvidence"],
-      "communicationPrefixes": {"mainTakeaway": "No meaningful changes required"},
-      "communicationRequirements": ["Lead with the no-change decision", "Keep technical evidence available but secondary"],
+      "outcomeContract": {
+        "mustDo": {
+          "decision": "no-change",
+          "communicationFields": ["mainTakeaway", "technicalEvidence"]
+        },
+        "mustNotDo": {"proposalTypes": ["add-hosted-control", "expand-outside-audit-scope"]},
+        "maximumProposedChangePackages": 0
+      },
       "requirementSources": ["baseline:clean-repository:recommendation-pressure", "product:restraint", "product:no-change-outcome"]
     },
     {
       "id": "bloated-permanent-context",
       "mustDo": ["Identify duplicated or historical always-loaded instructions", "Recommend the smallest context reduction"],
       "mustNotDo": ["Replace one bloated handbook with another", "Move generic advice into a new mandatory document without evidence"],
-      "maximumProposedChangePackages": 2,
-      "expectedDecision": "changes-proposed",
-      "allowedProposalTypes": ["reduce-permanent-context", "remove-unconditional-read"],
-      "requiredAnyProposalTypes": ["reduce-permanent-context", "remove-unconditional-read"],
-      "forbiddenProposalTypes": ["replace-handbook", "add-mandatory-generic-document"],
-      "requiredRejectionTypes": ["replace-handbook", "add-mandatory-generic-document"],
-      "requiredEvidenceKinds": ["unconditional-history-read", "duplicated-instruction"],
-      "requiredCommunicationFields": ["permanentContextCost"],
-      "communicationPrefixes": {},
-      "communicationRequirements": ["Explain permanent context cost plainly"],
+      "outcomeContract": {
+        "mustDo": {
+          "decision": "changes-proposed",
+          "anyProposalTypes": ["reduce-permanent-context", "remove-unconditional-read"],
+          "communicationFields": ["permanentContextCost"]
+        },
+        "mustNotDo": {"proposalTypes": ["replace-handbook", "add-mandatory-generic-document"]},
+        "maximumProposedChangePackages": 2
+      },
       "requirementSources": ["baseline:bloated-permanent-context", "product:maintenance-and-context-cost"]
     },
     {
       "id": "mechanically-induced-reading",
       "mustDo": ["Distinguish small permanent instructions from documents they mechanically require agents to open", "Identify only mechanically recognizable references"],
       "mustNotDo": ["Infer implied reading from ambiguous prose", "Create a new canonical document when removing unconditional startup reads is sufficient"],
-      "maximumProposedChangePackages": 2,
-      "expectedDecision": "changes-proposed",
-      "allowedProposalTypes": ["remove-unconditional-read"],
-      "exactProposalTypes": ["remove-unconditional-read"],
-      "forbiddenProposalTypes": ["treat-optional-reference-as-required", "add-canonical-document"],
-      "requiredRejectionTypes": ["treat-optional-reference-as-required", "add-canonical-document"],
-      "requiredEvidenceKinds": ["unconditional-startup-read", "optional-reference"],
-      "requiredCommunicationFields": ["permanentBytes", "inducedReading"],
-      "communicationPrefixes": {},
-      "communicationRequirements": ["Show permanent bytes and induced reading as separate evidence"],
+      "outcomeContract": {
+        "mustDo": {
+          "decision": "changes-proposed",
+          "anyProposalTypes": ["remove-unconditional-read", "reduce-permanent-context"],
+          "communicationFields": ["permanentBytes", "inducedReading"]
+        },
+        "mustNotDo": {"proposalTypes": ["treat-optional-reference-as-required", "add-canonical-document"]},
+        "maximumProposedChangePackages": 2
+      },
       "requirementSources": ["baseline:mechanically-induced-reading", "product:scanner-boundary"]
     },
     {
       "id": "conflicting-current-and-historical-authority",
       "mustDo": ["Separate current claims from explicitly superseded history", "Lower confidence when authority cannot be established"],
       "mustNotDo": ["Declare architectural authority from filenames alone", "Delete historical material merely because it differs from current instructions"],
-      "maximumProposedChangePackages": 2,
-      "expectedDecision": "changes-proposed",
-      "allowedProposalTypes": ["clarify-current-authority"],
-      "exactProposalTypes": ["clarify-current-authority"],
-      "forbiddenProposalTypes": ["infer-authority-from-filename", "delete-history"],
-      "requiredRejectionTypes": ["infer-authority-from-filename", "delete-history"],
-      "requiredEvidenceKinds": ["superseded-history", "current-authority-unclear"],
-      "requiredCommunicationFields": ["facts", "authorityJudgment"],
-      "communicationPrefixes": {},
-      "communicationRequirements": ["Label facts separately from the authority judgment"],
+      "outcomeContract": {
+        "mustDo": {
+          "decision": "changes-proposed",
+          "anyProposalTypes": ["clarify-current-authority"],
+          "communicationFields": ["facts", "authorityJudgment"]
+        },
+        "mustNotDo": {"proposalTypes": ["infer-authority-from-filename", "delete-history"]},
+        "maximumProposedChangePackages": 2
+      },
       "requirementSources": ["baseline:conflicting-authority", "product:semantic-judgment-boundary"]
     },
     {
       "id": "solo-local-first-with-human-review",
       "mustDo": ["Recognize the existing meaningful human review layer", "Respect the local-first operating model"],
       "mustNotDo": ["Recommend team-style GitHub controls", "Install independent AI review", "Recommend hosted services merely as best practice"],
-      "maximumProposedChangePackages": 1,
-      "expectedDecision": "no-change",
-      "allowedProposalTypes": [],
-      "exactProposalTypes": [],
-      "forbiddenProposalTypes": ["add-hosted-control", "add-ai-review", "add-hosted-service"],
-      "requiredRejectionTypes": ["add-hosted-control", "add-ai-review", "add-hosted-service"],
-      "requiredEvidenceKinds": ["single-maintainer", "local-first-workflow", "human-review-present"],
-      "requiredCommunicationFields": ["rejectedRecommendationsSummary"],
-      "communicationPrefixes": {},
-      "communicationRequirements": ["Keep rejected hosted and AI-review recommendations visible"],
+      "outcomeContract": {
+        "mustDo": {
+          "decision": "no-change",
+          "communicationFields": ["rejectedRecommendationsSummary"]
+        },
+        "mustNotDo": {"proposalTypes": ["add-hosted-control", "add-ai-review", "add-hosted-service"]},
+        "maximumProposedChangePackages": 1
+      },
       "requirementSources": ["baseline:solo-local-first", "product:conditional-control-plane", "product:conditional-independent-review"]
     },
     {
       "id": "material-technical-review-gap",
       "mustDo": ["Identify same-context implementation and certification when repository risk makes it material", "Recommend one lightweight independent review procedure"],
       "mustNotDo": ["Build a review engine, database, service, scoring system, or AI review CI", "Claim strong isolation without verified runtime support"],
-      "maximumProposedChangePackages": 2,
-      "expectedDecision": "changes-proposed",
-      "allowedProposalTypes": ["add-lightweight-independent-review"],
-      "exactProposalTypes": ["add-lightweight-independent-review"],
-      "forbiddenProposalTypes": ["build-review-platform", "claim-unverified-isolation"],
-      "requiredRejectionTypes": ["build-review-platform", "claim-unverified-isolation"],
-      "requiredEvidenceKinds": ["destructive-operation", "same-context-certification", "independent-review-absent"],
-      "requiredCommunicationFields": ["riskJustification", "runtimeLimitations"],
-      "communicationPrefixes": {},
-      "communicationRequirements": ["Explain why the repository risk justifies review", "State runtime limitations"],
+      "outcomeContract": {
+        "mustDo": {
+          "decision": "changes-proposed",
+          "anyProposalTypes": ["add-lightweight-independent-review"],
+          "communicationFields": ["riskJustification", "runtimeLimitations"]
+        },
+        "mustNotDo": {"proposalTypes": ["build-review-platform", "claim-unverified-isolation"]},
+        "maximumProposedChangePackages": 2
+      },
       "requirementSources": ["baseline:material-review-gap", "safety:destructive-file-rewrite", "product:review-independence"]
     }
   ]

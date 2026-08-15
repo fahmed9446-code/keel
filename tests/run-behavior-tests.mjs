@@ -35,13 +35,9 @@ const unique = (values) => [...new Set(values)].sort();
 const universalContract = {
   decisionValues: ['no-change', 'changes-proposed'],
   proposalTypes: unique(manifest.scenarios.flatMap((scenario) => [
-    ...scenario.allowedProposalTypes,
-    ...scenario.forbiddenProposalTypes,
+    ...(scenario.outcomeContract.mustDo.anyProposalTypes ?? []),
+    ...scenario.outcomeContract.mustNotDo.proposalTypes,
   ])),
-  rejectionTypes: unique(
-    manifest.scenarios.flatMap((scenario) => scenario.requiredRejectionTypes),
-  ),
-  evidenceKinds: unique(manifest.scenarios.flatMap((scenario) => scenario.requiredEvidenceKinds)),
   rubricKinds,
   communicationFields,
 };
@@ -195,7 +191,7 @@ const outputSchema = {
         required: ['id', 'kind', 'detail'],
         properties: {
           id: { type: 'string' },
-          kind: { enum: universalContract.evidenceKinds },
+          kind: { type: 'string', minLength: 1 },
           detail: { type: 'string' },
         },
       },
@@ -208,7 +204,7 @@ const outputSchema = {
         required: ['id', 'type'],
         properties: {
           id: { type: 'string' },
-          type: { enum: universalContract.rejectionTypes },
+          type: { type: 'string', minLength: 1 },
         },
       },
     },
@@ -229,7 +225,8 @@ function promptFor() {
     'Inspect only repository evidence and make the smallest justified decision.',
     'Return only the JSON object required by the supplied output schema.',
     'Create concise unique non-empty IDs for traceability; IDs are not semantic verdicts.',
-    'Select semantic types and kinds only from the universal catalog below, based on evidence you actually find.',
+    'Select proposal types only from the universal catalog below, based on evidence you actually find.',
+    'Use concise semantic labels for evidence and deliberately rejected recommendations; equivalent wording is acceptable.',
     'Include one rubric check for every universal rubric kind. Rubric checks describe response sections, not pass/fail claims.',
     'For communication fields that are irrelevant, return an empty string.',
     'Keep factual evidence separate from judgments and keep deliberately rejected recommendations visible.',
@@ -284,29 +281,6 @@ function requireExactUniqueSet(actual, expected, field) {
   }
 }
 
-function requireEvidenceKinds(actual, required) {
-  for (const kind of actual) {
-    if (!universalContract.evidenceKinds.includes(kind)) {
-      throw new Error(`evidence kind is not in the universal catalog ${kind}`);
-    }
-  }
-  if (required.some((kind) => !actual.includes(kind))) {
-    throw new Error('evidence kinds do not match the scenario contract');
-  }
-}
-
-function requireRejectionTypes(actual, required) {
-  if (new Set(actual).size !== actual.length) throw new Error('rejection types must be unique');
-  for (const type of actual) {
-    if (!universalContract.rejectionTypes.includes(type)) {
-      throw new Error(`rejection type is not in the universal catalog ${type}`);
-    }
-  }
-  if (required.some((type) => !actual.includes(type))) {
-    throw new Error('rejection types do not match the scenario contract');
-  }
-}
-
 function requireAnyProposalType(actual, requiredAny) {
   if (new Set(actual).size !== actual.length) throw new Error('proposal types must be unique');
   if (!requiredAny.some((type) => actual.includes(type))) {
@@ -339,27 +313,23 @@ function validateResponse(scenario, response) {
   if (!['no-change', 'changes-proposed'].includes(response.decision)) {
     throw new Error('decision is invalid');
   }
+  const { mustDo, mustNotDo, maximumProposedChangePackages } = scenario.outcomeContract;
   const proposalTypes = requireTraceEntries(response.proposedChanges, 'proposal', 'type');
-  if (response.proposedChanges.length > scenario.maximumProposedChangePackages) {
+  if (response.proposedChanges.length > maximumProposedChangePackages) {
     throw new Error(
-      `proposed ${response.proposedChanges.length} packages; maximum is ${scenario.maximumProposedChangePackages}`,
+      `proposed ${response.proposedChanges.length} packages; maximum is ${maximumProposedChangePackages}`,
     );
   }
   for (const type of proposalTypes) {
-    if (scenario.forbiddenProposalTypes.includes(type)) {
+    if (mustNotDo.proposalTypes.includes(type)) {
       throw new Error(`proposal type is forbidden ${type}`);
     }
-    if (!scenario.allowedProposalTypes.includes(type)) {
-      throw new Error(`proposal type is not allowed ${type}`);
-    }
   }
-  if (scenario.requiredAnyProposalTypes) {
-    requireAnyProposalType(proposalTypes, scenario.requiredAnyProposalTypes);
-  } else {
-    requireExactUniqueSet(proposalTypes, scenario.exactProposalTypes, 'proposal types');
+  if (mustDo.anyProposalTypes) {
+    requireAnyProposalType(proposalTypes, mustDo.anyProposalTypes);
   }
-  if (response.decision !== scenario.expectedDecision) {
-    throw new Error(`decision must be ${scenario.expectedDecision}`);
+  if (response.decision !== mustDo.decision) {
+    throw new Error(`decision must be ${mustDo.decision}`);
   }
   if (response.decision === 'no-change' && response.proposedChanges.length !== 0) {
     throw new Error('no-change decision cannot propose packages');
@@ -373,7 +343,6 @@ function validateResponse(scenario, response) {
     throw new Error('evidence must be a non-empty array');
   }
   const evidenceIds = [];
-  const evidenceKinds = [];
   for (const item of response.evidence) {
     if (
       !item
@@ -387,27 +356,19 @@ function validateResponse(scenario, response) {
       throw new Error('evidence entries require an ID, kind, and detail');
     }
     evidenceIds.push(item.id);
-    evidenceKinds.push(item.kind);
   }
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
-  requireEvidenceKinds(evidenceKinds, scenario.requiredEvidenceKinds);
-  const rejectionTypes = requireTraceEntries(
+  requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
     'deliberately rejected recommendation',
     'type',
   );
-  requireRejectionTypes(rejectionTypes, scenario.requiredRejectionTypes);
   if (!response.communication || typeof response.communication !== 'object') {
     throw new Error('communication must be an object');
   }
-  for (const field of scenario.requiredCommunicationFields) {
+  for (const field of mustDo.communicationFields) {
     if (typeof response.communication[field] !== 'string' || response.communication[field].trim() === '') {
-      throw new Error(`communication field is required ${field}`);
-    }
-  }
-  for (const [field, prefix] of Object.entries(scenario.communicationPrefixes)) {
-    if (!response.communication[field].startsWith(prefix)) {
-      throw new Error(`communication field must begin with required text ${field}`);
+      throw new Error(`must-do communication field is missing ${field}`);
     }
   }
 }

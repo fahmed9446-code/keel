@@ -61,23 +61,17 @@ test('scenario suite is capped at six pass-fail contracts', async () => {
   for (const scenario of scenarios.scenarios) {
     assert.ok(Array.isArray(scenario.mustDo) && scenario.mustDo.length > 0);
     assert.ok(Array.isArray(scenario.mustNotDo) && scenario.mustNotDo.length > 0);
-    assert.ok(Number.isInteger(scenario.maximumProposedChangePackages));
-    assert.ok(scenario.maximumProposedChangePackages <= 5);
-    assert.ok(['no-change', 'changes-proposed'].includes(scenario.expectedDecision));
-    assert.ok(Array.isArray(scenario.allowedProposalTypes));
-    const hasExactProposalTypes = Array.isArray(scenario.exactProposalTypes);
-    const hasRequiredAnyProposalTypes = Array.isArray(scenario.requiredAnyProposalTypes);
-    assert.notEqual(hasExactProposalTypes, hasRequiredAnyProposalTypes);
-    const requiredProposalTypes = hasExactProposalTypes
-      ? scenario.exactProposalTypes
-      : scenario.requiredAnyProposalTypes;
-    assert.ok(requiredProposalTypes.every((type) => scenario.allowedProposalTypes.includes(type)));
-    if (hasRequiredAnyProposalTypes) assert.ok(requiredProposalTypes.length > 0);
-    assert.ok(Array.isArray(scenario.forbiddenProposalTypes));
-    assert.ok(Array.isArray(scenario.requiredRejectionTypes));
-    assert.ok(Array.isArray(scenario.requiredEvidenceKinds));
-    assert.ok(Array.isArray(scenario.requiredCommunicationFields));
-    assert.ok(Array.isArray(scenario.communicationRequirements));
+    const { mustDo, mustNotDo, maximumProposedChangePackages } = scenario.outcomeContract;
+    assert.ok(['no-change', 'changes-proposed'].includes(mustDo.decision));
+    assert.ok(Array.isArray(mustDo.communicationFields) && mustDo.communicationFields.length > 0);
+    if (mustDo.decision === 'changes-proposed') {
+      assert.ok(Array.isArray(mustDo.anyProposalTypes) && mustDo.anyProposalTypes.length > 0);
+    } else {
+      assert.equal(mustDo.anyProposalTypes, undefined);
+    }
+    assert.ok(Array.isArray(mustNotDo.proposalTypes));
+    assert.ok(Number.isInteger(maximumProposedChangePackages));
+    assert.ok(maximumProposedChangePackages <= 5);
     assert.ok(Array.isArray(scenario.requirementSources));
   }
 });

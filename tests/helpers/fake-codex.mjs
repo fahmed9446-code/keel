@@ -154,7 +154,7 @@ function identifyScenario(guidance) {
 }
 
 function leaksOracle(scenarioId) {
-  return ['<scenario-contract>', 'expectedDecision', 'exactProposalTypes',
+  return ['<scenario-contract>', 'outcomeContract', 'expectedDecision', 'exactProposalTypes',
     'requiredAnyProposalTypes', 'forbiddenProposalTypes', 'exactRejectionTypes',
     'requiredRejectionTypes', 'requiredEvidenceKinds', 'mustDo', 'mustNotDo',
     'communicationRequirements', scenarioId].some((text) => prompt.includes(text));
@@ -202,6 +202,12 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
         type: 'add-ai-review',
       });
     }
+    if (scenarioId === 'clean-repository' && mode === 'clean-equivalent-outcome') {
+      response.deliberatelyRejectedRecommendations = [
+        { id: 'equivalent-hosted-rejection', type: 'add-hosted-service' },
+        { id: 'equivalent-document-rejection', type: 'add-mandatory-generic-document' },
+      ];
+    }
     if (scenarioId === 'clean-repository' && mode === 'missing-required-rejection-first') {
       response.deliberatelyRejectedRecommendations.shift();
     }
@@ -217,6 +223,21 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
         type: 'remove-unconditional-read',
       }];
     }
+    if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-equivalent-outcome') {
+      response.proposedChanges = [{
+        id: 'remove-unconditional-history-read',
+        type: 'remove-unconditional-read',
+      }];
+      response.evidence = [{
+        id: 'equivalent-context-evidence',
+        kind: 'unconditional-startup-read',
+        detail: expected.evidence[0].detail,
+      }];
+      response.deliberatelyRejectedRecommendations = [{
+        id: 'equivalent-document-rejection',
+        type: 'add-canonical-document',
+      }];
+    }
     if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-unrelated-proposal') {
       response.proposedChanges = [{
         id: 'unrelated-authority-change',
@@ -226,6 +247,29 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
     if (scenarioId === 'bloated-permanent-context' && mode === 'bloated-forbidden-proposal') {
       response.proposedChanges = [{
         id: 'forbidden-handbook-replacement',
+        type: 'replace-handbook',
+      }];
+    }
+    if (scenarioId === 'mechanically-induced-reading' && mode === 'induced-equivalent-context-reduction') {
+      response.proposedChanges = [{
+        id: 'reduce-mechanically-induced-context',
+        type: 'reduce-permanent-context',
+      }];
+    }
+    if (scenarioId === 'mechanically-induced-reading' && mode === 'missing-outcome-communication') {
+      response.communication.inducedReading = '';
+    }
+    if (
+      scenarioId === 'conflicting-current-and-historical-authority'
+      && mode === 'authority-equivalent-outcome'
+    ) {
+      response.evidence = [{
+        id: 'equivalent-authority-evidence',
+        kind: 'superseded-history',
+        detail: expected.evidence[0].detail,
+      }];
+      response.deliberatelyRejectedRecommendations = [{
+        id: 'equivalent-preservation-rejection',
         type: 'replace-handbook',
       }];
     }
