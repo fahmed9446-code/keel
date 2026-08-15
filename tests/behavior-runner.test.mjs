@@ -69,6 +69,21 @@ test('mechanically induced reading fixture has small permanent guidance and mate
   assert.ok(Buffer.byteLength(optionalIdeas) < 512);
 });
 
+test('conflicting authority fixture makes superseded history an active architecture dependency', async () => {
+  const fixture = new URL(
+    './fixtures/behavior-scenarios/conflicting-current-and-historical-authority/',
+    import.meta.url,
+  );
+  const [guidance, historicalPlan] = await Promise.all([
+    readFile(new URL('AGENTS.md', fixture), 'utf8'),
+    readFile(new URL('docs/old-plan.md', fixture), 'utf8'),
+  ]);
+
+  assert.match(guidance, /`docs\/old-plan\.md` is superseded history/);
+  assert.match(guidance, /use `docs\/old-plan\.md` for architecture decisions/i);
+  assert.match(historicalPlan, /Historical only/);
+});
+
 test('runner uses one correctly assembled fresh Codex process and repository per scenario', async () => {
   const run = await runWithFake();
   try {
