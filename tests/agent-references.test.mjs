@@ -37,7 +37,7 @@ test('agent references share a document shape without an adapter interface', asy
     const text = await readFile(new URL(name, referenceRoot), 'utf8');
     let cursor = -1;
     for (const heading of headings) {
-      const next = text.indexOf(`## ${heading}`);
+      const next = text.search(new RegExp(`^## ${heading.replaceAll(' ', '\\s+')}$`, 'm'));
       assert.ok(next > cursor, `${name}: ${heading} missing or out of order`);
       cursor = next;
     }
