@@ -584,24 +584,43 @@ function enforceBudget(report, maxBytes) {
       report.syntacticReferences.incompleteness.sort((left, right) => codeUnitCompare(left.reason, right.reason));
     }
   };
-  if (Buffer.byteLength(serialize(report)) > maxBytes) {
-    report.truncation.truncated = true;
-  }
-  let guard = 0;
-  while (Buffer.byteLength(serialize(report)) > maxBytes && guard < 100000) {
-    const candidate = sections.find(([, array]) => array.length > 0);
-    if (!candidate) break;
-    candidate[1].pop();
-    mark(candidate[0]);
-    report.truncation.truncated = true;
+  const synchronizeCounts = () => {
+    report.instructionSurfaceCandidates.retained = report.instructionSurfaceCandidates.candidates.length;
+    report.syntacticReferences.retained = report.syntacticReferences.references.length;
     report.truncation.itemsReturned = itemCount(report);
-    guard += 1;
+  };
+  const setPrefix = (name, array, items, length) => {
+    array.length = 0;
+    for (let index = 0; index < length; index += 1) array.push(items[index]);
+    mark(name);
+    synchronizeCounts();
+  };
+  let bytes = Buffer.byteLength(serialize(report));
+  if (bytes > maxBytes) report.truncation.truncated = true;
+  for (const [name, array] of sections) {
+    if (bytes <= maxBytes) break;
+    if (array.length === 0) continue;
+    const items = array.slice();
+    setPrefix(name, array, items, 0);
+    bytes = Buffer.byteLength(serialize(report));
+    if (bytes > maxBytes) continue;
+    let lower = 0;
+    let upper = items.length;
+    while (lower < upper) {
+      const middle = Math.ceil((lower + upper) / 2);
+      setPrefix(name, array, items, middle);
+      bytes = Buffer.byteLength(serialize(report));
+      if (bytes <= maxBytes) lower = middle;
+      else upper = middle - 1;
+    }
+    setPrefix(name, array, items, lower);
+    bytes = Buffer.byteLength(serialize(report));
+    break;
   }
-  report.instructionSurfaceCandidates.retained = report.instructionSurfaceCandidates.candidates.length;
-  report.syntacticReferences.retained = report.syntacticReferences.references.length;
-  report.truncation.itemsReturned = itemCount(report);
-  if (Buffer.byteLength(serialize(report)) > maxBytes) throw new Error(`minimum report exceeds ${maxBytes} bytes`);
-  return serialize(report);
+  synchronizeCounts();
+  const output = serialize(report);
+  if (Buffer.byteLength(output) > maxBytes) throw new Error(`minimum report exceeds ${maxBytes} bytes`);
+  return output;
 }
 
 function emptyHistory() {

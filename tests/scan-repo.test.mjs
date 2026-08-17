@@ -637,6 +637,37 @@ test('populates truncation totals while enforcing the exact 4 KiB serialized cei
   assert.ok(value.truncation.totalMatchingItems > value.truncation.itemsReturned);
 });
 
+test('bounds serialization work while retaining a deterministic generic prefix at the exact byte ceiling', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-bulk-budget-'));
+  const preload = join(await mkdtemp(join(tmpdir(), 'keel-stringify-budget-')), 'limit-stringify.cjs');
+  for (let index = 0; index < 5000; index += 1) {
+    await writeFile(join(root, `bulk-${String(index).padStart(5, '0')}.md`), 'x\n');
+  }
+  await writeFile(preload, `
+const stringify = JSON.stringify;
+let calls = 0;
+JSON.stringify = function boundedStringify(...args) {
+  calls += 1;
+  if (calls > 64) throw new Error('serialization work exceeded fixed test budget');
+  return stringify.apply(this, args);
+};
+`);
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root, ['--max-output-bytes', '4096'], {
+    NODE_OPTIONS: `--require=${preload}`,
+  });
+
+  assert.ok(Buffer.byteLength(raw) <= 4096, `report was ${Buffer.byteLength(raw)} bytes`);
+  assert.equal(value.truncation.truncated, true);
+  assert.deepEqual(value.truncation.sectionsTruncated, ['files.largest']);
+  assert.equal(value.truncation.totalMatchingItems, 5000);
+  assert.equal(value.truncation.itemsReturned, value.files.largest.length);
+  assert.deepEqual(value.files.largest.map((item) => item.path),
+    Array.from({ length: value.files.largest.length }, (_, index) => `bulk-${String(index).padStart(5, '0')}.md`));
+});
+
 test('uses locale-independent code-unit ordering for report paths', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-order-'));
   await writeFile(join(root, 'Z.md'), 'same\n');
