@@ -288,6 +288,7 @@ test('keeps instruction path and byte evidence independent of generic largest-fi
       source: 'registry',
       scopePath: '.',
     }],
+    incompleteness: [],
   });
   assert.ok(value.files.largest.length < 425);
   assert.equal(value.truncation.sectionsTruncated.includes('instructionSurfaceCandidates.candidates'), false);
@@ -556,7 +557,7 @@ test('classifies every path component and redacts sensitive paths across evidenc
   const root = join(parent, 'credential-repository');
   await mkdir(join(root, 'public', 'secrets'), { recursive: true });
   await mkdir(join(root, 'public', 'token-cache'), { recursive: true });
-  await writeFile(join(root, 'public', 'secrets', 'AGENTS.md'), '[public](../../public.md)\n');
+  await writeFile(join(root, 'public', 'secrets', 'AGENTS.md'), 'SENSITIVE_INSTRUCTION_VALUE_MUST_NOT_APPEAR\n[public](../../public.md)\n');
   await writeFile(join(root, 'public', 'token-cache', 'notes.md'), 'synthetic placeholder\n');
   await writeFile(join(root, 'public.md'), 'public\n');
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
@@ -571,6 +572,19 @@ test('classifies every path component and redacts sensitive paths across evidenc
   assert.ok(value.files.largest.every((item) => !item.path.includes('[redacted')));
   assert.ok(value.agentSurfaces.every((item) => !item.path.includes('[redacted')));
   assert.ok(value.history.fileFrequency.every((item) => !item.path.includes('[redacted')));
+  assert.deepEqual(value.instructionSurfaceCandidates, {
+    complete: false,
+    total: 1,
+    retained: 0,
+    candidates: [],
+    incompleteness: [{ reason: 'sensitive-path-withheld', count: 1 }],
+  });
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.ok(value.syntacticReferences.incompleteness.some((item) => (
+    item.reason === 'sensitive-instruction-content-withheld' && item.count === 1
+  )));
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('sensitive-instruction-content-withheld'));
+  assert.doesNotMatch(raw, /SENSITIVE_INSTRUCTION_VALUE_MUST_NOT_APPEAR/);
 
   const detailed = runScanner(root, ['--include-sensitive-paths']).value;
   assert.deepEqual(detailed.sensitiveIndicators.paths, [
@@ -627,6 +641,18 @@ test('skips symbolic links without exposing link or target paths', async () => {
 
   assert.equal(value.files.skippedSymbolicLinks, 1);
   assert.deepEqual(value.agentSurfaces, []);
+  assert.deepEqual(value.instructionSurfaceCandidates, {
+    complete: false,
+    total: 1,
+    retained: 0,
+    candidates: [],
+    incompleteness: [{ reason: 'symbolic-link-withheld', count: 1 }],
+  });
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.ok(value.syntacticReferences.incompleteness.some((item) => (
+    item.reason === 'symbolic-link-instruction-content-withheld' && item.count === 1
+  )));
+  assert.ok(value.nativeLiveInspectionRequired.reasons.includes('symbolic-link-instruction-content-withheld'));
   assert.deepEqual(value.syntacticReferences.references, []);
   assert.ok(value.warnings.includes('Skipped 1 symbolic link; symbolic links are never followed.'));
   assert.doesNotMatch(raw, /AGENTS\.md|outside-instructions|external-secret/);

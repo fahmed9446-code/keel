@@ -216,6 +216,7 @@ test('README distinguishes adaptive judgment from linting and bounds measured ef
     readme,
     /Example — illustrative values[\s\S]*Current measured fact:[\s\S]*Measured before → after[\s\S]*approved and validated cleanup/i,
   );
+  assert.match(readme, /Example — illustrative values[^\n]*Codex[^\n]*repository root[^\n]*current working directory/i);
 });
 
 test('README describes the durable behavior runner without remediation history', async () => {
@@ -226,6 +227,7 @@ test('README describes the durable behavior runner without remediation history',
   assert.match(development, /required[^.]*forbidden[^.]*outcomes/i);
   assert.match(development, /bounded semantic diagnostics/i);
   assert.match(development, /not a model benchmark/i);
+  assert.match(development, /Seven scenarios/i);
   assert.match(development, /Keel's public repository[^.]*GitHub[^.]*deterministic/i);
   assert.doesNotMatch(development, /alias|breaker|diagnostic cycle|historical live-run/i);
 });
@@ -255,6 +257,7 @@ test('README keeps schema 3 evidence, scope, trust, and version claims consisten
   assert.match(readme, /documented default limit.*effective runtime limit/i);
   assert.match(readme, /path:line/i);
   assert.match(readme, /snapshot.*native live inspection.*separately/is);
+  assert.match(readme, /native inspection[^.]*only where[^.]*safe[^.]*not dereference symbolic links[^.]*sensitive content/is);
   assert.match(readme, /target-repository prose.*untrusted audit evidence/i);
   assert.match(readme, /cannot change Keel's audit method.*approval boundary.*report contract.*five-package cap/is);
   assert.match(readme, /32 KiB/);

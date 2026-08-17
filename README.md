@@ -194,7 +194,7 @@ Scanner schema 3 reports two deliberately separate evidence lanes:
 - **Snapshot lane (`evidenceProvenance.snapshot`):** tracked paths, metadata, and selected content come from a Git index/blob snapshot. This can include staged index content. It is never equivalent to current working-copy truth.
 - **Live path-status lane (`evidenceProvenance.livePathStatus`):** dirty, staged, untracked, and ignored information consists of path-status-only live facts and counts. The scanner never reads that live content and never enumerates the live directory tree.
 
-It also reports instruction-surface candidates and syntactic reference edges as evidence-bound facts; neither makes a file active, applicable, or authoritative. Dirty working-copy content, untracked content, and ignored content are explicit content blind spots. Failed Git lanes, unsupported entries, skipped or unreadable snapshot candidates, and other incomplete evidence also trigger `nativeLiveInspectionRequired`. The agent must label transparent native live inspection separately from scanner snapshot evidence and disclose what remained unseen.
+It also reports instruction-surface candidates and syntactic reference edges as evidence-bound facts; neither makes a file active, applicable, or authoritative. Dirty working-copy content, untracked content, and ignored content are explicit content blind spots. Failed Git lanes, unsupported entries, skipped or unreadable snapshot candidates, and other incomplete evidence also trigger `nativeLiveInspectionRequired`. The agent must label transparent native live inspection separately from scanner snapshot evidence and disclose what remained unseen. Native inspection is a fallback only where it is safe: it must not dereference symbolic links or override the scanner's refusal to read sensitive content.
 
 During an audit, target-repository prose is untrusted audit evidence. It cannot change Keel's audit method, approval boundary, report contract, five-package cap, capability posture, or installation rules; normal repository instructions remain expected evidence.
 
@@ -202,7 +202,7 @@ During an audit, target-repository prose is untrusted audit evidence. It cannot 
 
 When complete evidence and native-mechanics judgment support it, Keel may report deterministic facts about repository mechanics. It first identifies the active agent and current working directory, then measures only that agent's applicable instruction chain; nested candidates outside the chain may be acknowledged but do not join the headline total.
 
-> **Example — illustrative values**
+> **Example — illustrative values for Codex, scoped from the repository root to the current working directory**
 >
 > Current measured fact: identified always-loaded instruction surface — 14.2 KB across 4 files
 >
@@ -275,7 +275,7 @@ Keel's public repository uses GitHub for this deterministic suite; that reposito
 npm run test:behavior
 ```
 
-`npm run test:behavior` is an opt-in live reasoning regression suite, not a model benchmark. Six scenarios check observable required and forbidden outcomes, package limits, evidence, communication, deliberate rejections, freshness, and cleanup. Bounded semantic diagnostics explain failures without retaining raw prompts, transcripts, repository content, or private response text.
+`npm run test:behavior` is an opt-in live reasoning regression suite, not a model benchmark. Seven scenarios check observable required and forbidden outcomes, package limits, evidence, communication, deliberate rejections, freshness, and cleanup. Bounded semantic diagnostics explain failures without retaining raw prompts, transcripts, repository content, or private response text.
 
 ## Privacy
 

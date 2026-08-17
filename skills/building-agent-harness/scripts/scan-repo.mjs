@@ -325,6 +325,29 @@ function registryMatches(files, directories) {
   return matches.sort((left, right) => codeUnitCompare(left.path, right.path) || codeUnitCompare(left.agent, right.agent));
 }
 
+function isInstructionFilename(path) {
+  const name = basename(path);
+  return AGENT_SURFACES.some((surface) => (
+    surface.kind === 'instruction-file-candidate'
+      && surface.match === 'filename'
+      && surface.value === name
+  ));
+}
+
+function withheldInstructionCandidates(entries) {
+  const sensitivePaths = new Set();
+  const symbolicLinkPaths = new Set();
+  for (const entry of entries ?? []) {
+    if (entry.stage !== 0 || !isInstructionFilename(entry.path)) continue;
+    if (sensitiveCategory(entry.path)) sensitivePaths.add(entry.path);
+    else if (entry.mode === '120000') symbolicLinkPaths.add(entry.path);
+  }
+  return {
+    sensitive: sensitivePaths.size,
+    symbolicLinks: symbolicLinkPaths.size,
+  };
+}
+
 function normalizeReference(sourcePath, target) {
   const cleaned = target.trim().replace(/^<|>$/g, '').split('#')[0].split('?')[0];
   const portable = portablePath(cleaned);
@@ -395,7 +418,7 @@ function createBlobReader(root) {
   };
 }
 
-function instructionSurfaceCandidates(files, surfaces, pathsAvailable) {
+function instructionSurfaceCandidates(files, surfaces, pathsAvailable, withheld) {
   const filesByPath = new Map(files.map((file) => [file.path, file]));
   const candidates = surfaces
     .filter((surface) => surface.kind === 'instruction-file-candidate')
@@ -407,11 +430,16 @@ function instructionSurfaceCandidates(files, surfaces, pathsAvailable) {
       source: surface.source,
       scopePath: posix.dirname(surface.path),
     }));
+  const incompleteness = [];
+  if (withheld.sensitive > 0) incompleteness.push({ reason: 'sensitive-path-withheld', count: withheld.sensitive });
+  if (withheld.symbolicLinks > 0) incompleteness.push({ reason: 'symbolic-link-withheld', count: withheld.symbolicLinks });
+  const withheldTotal = withheld.sensitive + withheld.symbolicLinks;
   return {
-    complete: pathsAvailable && candidates.every((candidate) => candidate.bytes !== null),
-    total: pathsAvailable ? candidates.length : null,
+    complete: pathsAvailable && withheldTotal === 0 && candidates.every((candidate) => candidate.bytes !== null),
+    total: pathsAvailable ? candidates.length + withheldTotal : null,
     retained: candidates.length,
     candidates,
+    incompleteness,
   };
 }
 
@@ -419,13 +447,15 @@ function incrementReason(counts, reason, count = 1) {
   counts.set(reason, (counts.get(reason) ?? 0) + count);
 }
 
-function syntacticReferences(entries, candidates, reader, pathsAvailable) {
+function syntacticReferences(entries, candidates, reader, pathsAvailable, withheld) {
   const entriesByPath = new Map(entries.filter((entry) => entry.stage === 0).map((entry) => [entry.path, entry]));
   const allRootPaths = [...new Set(candidates.candidates.map((item) => item.path))].sort(codeUnitCompare);
   const rootPaths = allRootPaths.slice(0, MAX_REFERENCE_ROOTS);
   const references = [];
   const incomplete = new Map();
   if (!pathsAvailable) incrementReason(incomplete, 'git-snapshot-unavailable');
+  if (withheld.sensitive > 0) incrementReason(incomplete, 'sensitive-instruction-content-withheld', withheld.sensitive);
+  if (withheld.symbolicLinks > 0) incrementReason(incomplete, 'symbolic-link-instruction-content-withheld', withheld.symbolicLinks);
   if (allRootPaths.length > rootPaths.length) {
     incrementReason(incomplete, 'traversal-budget', allRootPaths.length - rootPaths.length);
   }
@@ -664,7 +694,7 @@ function nonGitReport(rootName, options) {
     contentBlindSpots: { dirtyFiles: null, untrackedFiles: null, ignoredFiles: null, total: null },
     files: { total: null, totalBytes: null, skippedSymbolicLinks: 0, largest: [] },
     agentSurfaces: [],
-    instructionSurfaceCandidates: { complete: false, total: null, retained: 0, candidates: [] },
+    instructionSurfaceCandidates: { complete: false, total: null, retained: 0, candidates: [], incompleteness: [{ reason: 'git-snapshot-unavailable', count: 1 }] },
     syntacticReferences: { complete: false, total: null, retained: 0, references: [], incompleteness: [{ reason: 'git-snapshot-unavailable', count: 1 }] },
     packageScripts: [],
     workflows: [],
@@ -701,9 +731,10 @@ function buildGitReport(rootName, root, gitData, options) {
   const visibleFiles = regularFiles.filter((file) => !sensitiveCategory(file.path));
   const visibleDirectories = new Set([...inferredDirectories(visibleFiles)].filter((path) => !sensitiveCategory(path)));
   const agentSurfaces = registryMatches(visibleFiles, visibleDirectories);
-  const instructionCandidates = instructionSurfaceCandidates(visibleFiles, agentSurfaces, gitData.entries !== null);
+  const withheldCandidates = withheldInstructionCandidates(gitData.entries);
+  const instructionCandidates = instructionSurfaceCandidates(visibleFiles, agentSurfaces, gitData.entries !== null, withheldCandidates);
   const reader = createBlobReader(root);
-  const references = syntacticReferences(gitData.entries ?? [], instructionCandidates, reader, gitData.entries !== null);
+  const references = syntacticReferences(gitData.entries ?? [], instructionCandidates, reader, gitData.entries !== null, withheldCandidates);
   const scripts = packageScripts(visibleFiles, reader);
   const readerStats = reader.stats();
   const knownPaths = new Set([
@@ -733,6 +764,8 @@ function buildGitReport(rootName, root, gitData, options) {
   if (gitData.headState === null) reasons.push('head-state-evidence-incomplete');
   if (!gitData.historyAvailable) reasons.push('history-evidence-incomplete');
   if (gitData.unsupportedPaths.size > 0) reasons.push('unsupported-index-entry-content');
+  if (withheldCandidates.sensitive > 0) reasons.push('sensitive-instruction-content-withheld');
+  if (withheldCandidates.symbolicLinks > 0) reasons.push('symbolic-link-instruction-content-withheld');
   if (readerStats.limitSkipped > 0) reasons.push('snapshot-content-limit-exceeded');
   if (readerStats.failed > 0) reasons.push('snapshot-content-read-failed');
   const skippedSymbolicLinks = gitData.symlinkPaths.size;
