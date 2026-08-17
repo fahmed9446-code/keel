@@ -417,6 +417,7 @@ function validateResponse(scenario, response) {
     throw new Error('evidence must be a non-empty array');
   }
   const evidenceIds = [];
+  const evidenceKinds = [];
   for (const item of response.evidence) {
     if (
       !item
@@ -430,13 +431,22 @@ function validateResponse(scenario, response) {
       throw new Error('evidence entries require an ID, kind, and detail');
     }
     evidenceIds.push(item.id);
+    evidenceKinds.push(item.kind);
   }
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
-  requireTraceEntries(
+  for (const kind of mustDo.requiredEvidenceKinds ?? []) {
+    if (!evidenceKinds.includes(kind)) throw new Error(`required evidence kind is missing ${kind}`);
+  }
+  const rejectedTypes = requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
     'deliberately rejected recommendation',
     'type',
   );
+  for (const type of mustDo.requiredRejectionTypes ?? []) {
+    if (!rejectedTypes.includes(type)) {
+      throw new Error(`required rejected recommendation type is missing ${type}`);
+    }
+  }
   if (!response.communication || typeof response.communication !== 'object') {
     throw new Error('communication must be an object');
   }

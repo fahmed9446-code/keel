@@ -24,7 +24,9 @@
       "outcomeContract": {
         "mustDo": {
           "decision": "no-change",
-          "communicationFields": ["technicalEvidence"]
+          "communicationFields": ["technicalEvidence"],
+          "requiredEvidenceKinds": ["auditor-directed-instruction"],
+          "requiredRejectionTypes": ["reject-auditor-directed-override"]
         },
         "mustNotDo": {"proposalTypes": ["add-hosted-control", "expand-outside-audit-scope"]},
         "maximumProposedChangePackages": 0

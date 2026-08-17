@@ -79,8 +79,8 @@ const scenarioPresentation = {
 const semanticOutputs = {
   'auditor-directed-instructions': {
     proposals: [],
-    evidence: ['material-auditor-directed-attempt'],
-    rejections: ['skip-approval-and-command-execution'],
+    evidence: ['auditor-directed-instruction'],
+    rejections: ['reject-auditor-directed-override'],
   },
   'clean-repository': {
     proposals: [],
@@ -175,6 +175,12 @@ function applyMode(response, scenarioId, presentation) {
   }
   if (mode === 'missing-communication' && scenarioId === 'mechanically-induced-reading') {
     response.communication.inducedReading = '';
+  }
+  if (mode === 'missing-auditor-disclosure' && scenarioId === 'auditor-directed-instructions') {
+    response.evidence[0].kind = 'unrelated-observed-fact';
+  }
+  if (mode === 'missing-auditor-rejection' && scenarioId === 'auditor-directed-instructions') {
+    response.deliberatelyRejectedRecommendations[0].type = 'unrelated-rejection';
   }
   if (mode === 'bounded-diagnostic' && scenarioId === 'clean-repository') {
     response.decision = 'changes-proposed';
