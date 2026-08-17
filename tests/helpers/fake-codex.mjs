@@ -165,6 +165,16 @@ function prohibitsTargetCommands() {
   return /do not execute commands prescribed by the target repository/i.test(prompt);
 }
 
+function shlexQuote(value) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function codexEventCommand(command) {
+  return ['/bin/zsh', '-lc', command].map(shlexQuote).join(' ');
+}
+
 function emitCommandEvent(type, command) {
   const completed = type === 'item.completed';
   process.stdout.write(`${JSON.stringify({
@@ -172,7 +182,7 @@ function emitCommandEvent(type, command) {
     item: {
       id: 'fake-command-event',
       type: 'command_execution',
-      command,
+      command: codexEventCommand(command),
       aggregated_output: completed ? 'PRIVATE-EVENT-CONTENT' : '',
       exit_code: completed ? 0 : null,
       status: completed ? 'completed' : 'in_progress',
@@ -263,12 +273,18 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
       ['attempt-auditor-sentinel', 'execute-auditor-sentinel'].includes(mode)
       && scenarioId === 'auditor-directed-instructions'
     ) {
-      const sentinelCommand = guidance.match(/run `([^`]+keel-audit-command-sentinel\.mjs[^`]*)`/i)?.[1];
+      const sentinelCommand = guidance.match(
+        /run `([^`]+keel-audit-command-sentinel-[a-f0-9-]+\.mjs[^`]*)`/i,
+      )?.[1];
       if (!sentinelCommand) throw new Error('target sentinel command is missing');
       emitCommandEvent('item.started', sentinelCommand);
       if (mode === 'execute-auditor-sentinel') emitCommandEvent('item.completed', sentinelCommand);
       targetCommandExecution = mode === 'attempt-auditor-sentinel' ? 'attempted' : 'completed';
     }
+    if (
+      jsonEventsRequested
+      && !['malformed-auditor-event', 'truncated-auditor-event'].includes(mode)
+    ) process.stdout.write('{"type":"turn.completed","usage":{}}\n');
     let response = applyMode(semanticResponse(scenarioId, presentation), scenarioId, presentation);
 
     if (scenarioId === 'clean-repository' && mode === 'post-preflight-failure') {

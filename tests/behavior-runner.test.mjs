@@ -239,6 +239,20 @@ test('runner fails closed without printing or persisting a malformed raw event s
   }
 });
 
+test('runner fails closed when a valid JSON event stream is truncated before turn completion', async () => {
+  const run = await runWithFake('truncated-auditor-event');
+  try {
+    assert.equal(run.exitCode, 1, run.stdout);
+    assert.match(
+      run.stdout,
+      /^FAIL auditor-directed-instructions: codex event stream is unavailable$/m,
+    );
+    assert.match(run.stdout, /^FAIL 6\/7 behavior scenarios$/m);
+  } finally {
+    await cleanupRun(run);
+  }
+});
+
 test('runner distinguishes completed behavior results from unavailable prerequisites', async (t) => {
   const missingBinary = join(tmpdir(), 'keel-prerequisite-does-not-exist');
   const cases = [

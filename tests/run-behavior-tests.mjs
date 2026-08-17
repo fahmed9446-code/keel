@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -243,7 +244,8 @@ function shellQuote(value) {
 
 async function prepareExecutionSentinel(scenario, temporaryRoot, repository) {
   if (scenario.id !== sentinelScenarioId) return undefined;
-  const executablePath = join(temporaryRoot, 'keel-audit-command-sentinel.mjs');
+  const sentinelToken = `keel-audit-command-sentinel-${randomUUID()}.mjs`;
+  const executablePath = join(temporaryRoot, sentinelToken);
   await writeFile(executablePath, 'process.exit(0);\n');
 
   const guidancePath = join(repository, 'AGENTS.md');
@@ -253,7 +255,10 @@ async function prepareExecutionSentinel(scenario, temporaryRoot, repository) {
   }
   const command = `${shellQuote(process.execPath)} ${shellQuote(executablePath)}`;
   await writeFile(guidancePath, guidance.replace(sentinelCommandPlaceholder, command));
-  return { command };
+  return {
+    runtimeToken: basename(process.execPath),
+    sentinelToken,
+  };
 }
 
 function createExecutionSentinelObserver(sentinel) {
@@ -261,7 +266,35 @@ function createExecutionSentinelObserver(sentinel) {
   let discardingOversizedLine = false;
   let invalid = false;
   let observedEvents = 0;
+  let turnCompleted = false;
+  let lastEventType;
   let state = 'not-requested';
+
+  function tokenIndex(command, token, fromIndex) {
+    let index = command.indexOf(token, fromIndex);
+    while (index !== -1) {
+      const before = command[index - 1];
+      const after = command[index + token.length];
+      const beforeIsBoundary = before === undefined || /[\s'"\\/]/.test(before);
+      const afterIsBoundary = after === undefined || /[\s'"\\/]/.test(after);
+      if (beforeIsBoundary && afterIsBoundary) return index;
+      index = command.indexOf(token, index + token.length);
+    }
+    return -1;
+  }
+
+  function matchesExecutionFingerprint(command) {
+    const runtimeIndex = tokenIndex(command, sentinel.runtimeToken, 0);
+    if (runtimeIndex === -1) return false;
+    const sentinelIndex = tokenIndex(
+      command,
+      sentinel.sentinelToken,
+      runtimeIndex + sentinel.runtimeToken.length,
+    );
+    if (sentinelIndex === -1) return false;
+    const between = command.slice(runtimeIndex + sentinel.runtimeToken.length, sentinelIndex);
+    return between.length <= 1_024 && !/[\r\n;&|`$<>]/.test(between);
+  }
 
   function observeLine(line) {
     if (line.trim() === '') return;
@@ -277,11 +310,13 @@ function createExecutionSentinelObserver(sentinel) {
       return;
     }
     observedEvents += 1;
+    lastEventType = typeof event?.type === 'string' ? event.type : undefined;
+    if (event?.type === 'turn.completed') turnCompleted = true;
     const item = event?.item;
     if (
       item?.type !== 'command_execution'
       || typeof item.command !== 'string'
-      || !item.command.includes(sentinel.command)
+      || !matchesExecutionFingerprint(item.command)
     ) return;
     if (event.type === 'item.completed' && item.status === 'completed') {
       state = 'completed';
@@ -331,7 +366,10 @@ function createExecutionSentinelObserver(sentinel) {
     finish,
     result: () => ({
       state,
-      available: !invalid && observedEvents > 0,
+      available: !invalid
+        && observedEvents > 0
+        && turnCompleted
+        && lastEventType === 'turn.completed',
     }),
   };
 }
