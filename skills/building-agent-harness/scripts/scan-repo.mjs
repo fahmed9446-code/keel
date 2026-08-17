@@ -10,6 +10,9 @@ const SCHEMA_VERSION = 3;
 const DEFAULT_MAX_BYTES = 32 * 1024;
 const MIN_MAX_BYTES = 4 * 1024;
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
+const MAX_REFERENCE_ROOTS = 64;
+const MAX_REFERENCE_FACTS = 128;
+const MAX_REFERENCE_CONTENT_READS = 64;
 const GIT_TIMEOUT_MS = 1000;
 const GIT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const REGULAR_FILE_MODES = new Set(['100644', '100755']);
@@ -418,19 +421,30 @@ function incrementReason(counts, reason, count = 1) {
 
 function syntacticReferences(entries, candidates, reader, pathsAvailable) {
   const entriesByPath = new Map(entries.filter((entry) => entry.stage === 0).map((entry) => [entry.path, entry]));
-  const rootPaths = [...new Set(candidates.candidates.map((item) => item.path))].sort(codeUnitCompare);
+  const allRootPaths = [...new Set(candidates.candidates.map((item) => item.path))].sort(codeUnitCompare);
+  const rootPaths = allRootPaths.slice(0, MAX_REFERENCE_ROOTS);
   const references = [];
   const incomplete = new Map();
   if (!pathsAvailable) incrementReason(incomplete, 'git-snapshot-unavailable');
+  if (allRootPaths.length > rootPaths.length) {
+    incrementReason(incomplete, 'traversal-budget', allRootPaths.length - rootPaths.length);
+  }
   const visited = new Set(rootPaths);
   const queue = rootPaths.map((path) => ({ path, hop: 0 }));
-  for (let index = 0; index < queue.length; index += 1) {
+  let contentReads = 0;
+  let referenceFacts = 0;
+  traversal: for (let index = 0; index < queue.length; index += 1) {
+    if (contentReads >= MAX_REFERENCE_CONTENT_READS) {
+      incrementReason(incomplete, 'traversal-budget', queue.length - index);
+      break;
+    }
     const source = queue[index];
     const sourceEntry = entriesByPath.get(source.path);
     if (!sourceEntry || !REGULAR_FILE_MODES.has(sourceEntry.mode)) {
       incrementReason(incomplete, 'unsupported-or-missing-object');
       continue;
     }
+    contentReads += 1;
     const read = reader.readWithStatus(sourceEntry);
     if (read.text === null) {
       incrementReason(incomplete, read.reason);
@@ -438,10 +452,22 @@ function syntacticReferences(entries, candidates, reader, pathsAvailable) {
     }
     const extracted = extractReferences(source.path, read.text);
     if (source.hop === 3) {
-      if (extracted.length > 0) incrementReason(incomplete, 'hop-limit', extracted.length);
+      const retainedFacts = Math.min(extracted.length, MAX_REFERENCE_FACTS - referenceFacts);
+      if (retainedFacts > 0) incrementReason(incomplete, 'hop-limit', retainedFacts);
+      referenceFacts += retainedFacts;
+      if (retainedFacts < extracted.length) {
+        incrementReason(incomplete, 'traversal-budget', extracted.length - retainedFacts);
+        break;
+      }
       continue;
     }
-    for (const reference of extracted) {
+    for (let referenceIndex = 0; referenceIndex < extracted.length; referenceIndex += 1) {
+      if (referenceFacts >= MAX_REFERENCE_FACTS) {
+        incrementReason(incomplete, 'traversal-budget', extracted.length - referenceIndex);
+        break traversal;
+      }
+      referenceFacts += 1;
+      const reference = extracted[referenceIndex];
       const hop = source.hop + 1;
       if (sensitiveCategory(reference.targetPath)) {
         incrementReason(incomplete, 'sensitive-target-refused');
@@ -533,14 +559,14 @@ function enforceBudget(report, maxBytes) {
   report.truncation.totalMatchingItems = totalMatchingItems;
   report.truncation.itemsReturned = totalMatchingItems;
   const sections = [
-    ['files.largest', report.files.largest, 50],
-    ['history.fileFrequency', report.history.fileFrequency, 50],
-    ['agentSurfaces', report.agentSurfaces, 50],
-    ['workflows', report.workflows, 25],
-    ['packageScripts', report.packageScripts, 50],
-    ['sensitiveIndicators.paths', report.sensitiveIndicators.paths, 25],
-    ['syntacticReferences.references', report.syntacticReferences.references, 100],
-    ['instructionSurfaceCandidates.candidates', report.instructionSurfaceCandidates.candidates, 100],
+    ['files.largest', report.files.largest],
+    ['history.fileFrequency', report.history.fileFrequency],
+    ['agentSurfaces', report.agentSurfaces],
+    ['workflows', report.workflows],
+    ['packageScripts', report.packageScripts],
+    ['sensitiveIndicators.paths', report.sensitiveIndicators.paths],
+    ['syntacticReferences.references', report.syntacticReferences.references],
+    ['instructionSurfaceCandidates.candidates', report.instructionSurfaceCandidates.candidates],
   ].filter(([, array]) => Array.isArray(array));
   const mark = (name) => {
     if (!report.truncation.sectionsTruncated.includes(name)) report.truncation.sectionsTruncated.push(name);
@@ -560,13 +586,6 @@ function enforceBudget(report, maxBytes) {
   };
   if (Buffer.byteLength(serialize(report)) > maxBytes) {
     report.truncation.truncated = true;
-    for (const [name, array, cap] of sections) {
-      if (Buffer.byteLength(serialize(report)) <= maxBytes) break;
-      if (array.length > cap) {
-        array.splice(cap);
-        mark(name);
-      }
-    }
   }
   let guard = 0;
   while (Buffer.byteLength(serialize(report)) > maxBytes && guard < 100000) {

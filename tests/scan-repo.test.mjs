@@ -293,6 +293,50 @@ test('keeps instruction path and byte evidence independent of generic largest-fi
   assert.equal(value.truncation.sectionsTruncated.includes('instructionSurfaceCandidates.candidates'), false);
 });
 
+test('exhausts generic evidence as needed before reducing high-priority reference edges', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-reference-priority-'));
+  const links = Array.from({ length: 128 }, (_, index) => `[ref](docs/missing-${String(index).padStart(3, '0')}.md)`).join('\n');
+  await writeFile(join(root, 'AGENTS.md'), `${links}\n`);
+  for (let index = 0; index < 120; index += 1) {
+    const name = `generic-${String(index).padStart(3, '0')}-${'x'.repeat(64)}.md`;
+    await writeFile(join(root, name), `${index}\n`);
+  }
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root);
+
+  assert.ok(Buffer.byteLength(raw) <= 32 * 1024);
+  assert.equal(value.truncation.truncated, true);
+  assert.equal(value.syntacticReferences.retained, 128);
+  assert.equal(value.truncation.sectionsTruncated.includes('syntacticReferences.references'), false);
+  assert.equal(value.syntacticReferences.incompleteness.some((item) => item.reason === 'output-budget'), false);
+  assert.ok(value.files.largest.length < 120);
+  assert.ok(value.truncation.sectionsTruncated.includes('files.largest'));
+});
+
+test('exhausts generic evidence as needed before reducing high-priority instruction candidates', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-instruction-priority-many-'));
+  for (let index = 0; index < 110; index += 1) {
+    const directory = join(root, `package-${String(index).padStart(3, '0')}`);
+    await mkdir(directory);
+    await writeFile(join(directory, 'AGENTS.md'), `${index}\n`);
+  }
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root);
+
+  assert.ok(Buffer.byteLength(raw) <= 32 * 1024);
+  assert.equal(value.truncation.truncated, true);
+  assert.equal(value.instructionSurfaceCandidates.retained, 110);
+  assert.equal(value.instructionSurfaceCandidates.complete, true);
+  assert.equal(value.truncation.sectionsTruncated.includes('instructionSurfaceCandidates.candidates'), false);
+  assert.ok(value.files.largest.length < 110 || value.agentSurfaces.length < 110);
+  assert.ok(value.truncation.sectionsTruncated.includes('files.largest')
+    || value.truncation.sectionsTruncated.includes('agentSurfaces'));
+});
+
 test('discloses total and retained instruction counts when the instruction lane itself is truncated', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-instruction-truncation-'));
   for (let index = 0; index < 120; index += 1) {
@@ -317,8 +361,12 @@ test('marks syntactic reference evidence incomplete when reference edges exceed 
   const root = await mkdtemp(join(tmpdir(), 'keel-reference-truncation-'));
   const links = Array.from({ length: 120 }, (_, index) => `[ref](docs/missing-${String(index).padStart(3, '0')}.md)`).join('\n');
   await writeFile(join(root, 'AGENTS.md'), `${links}\n`);
+  await writeFile(join(root, 'package.json'), '{"scripts":{"check":"node --check index.mjs","test":"node --test"}}\n');
+  await mkdir(join(root, '.github', 'workflows'), { recursive: true });
+  await writeFile(join(root, '.github', 'workflows', 'test.yml'), 'name: test\n');
   initializeRepository(root);
   execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['-c', 'user.name=Keel Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'initial'], { cwd: root });
 
   const { raw, value } = runScanner(root, ['--max-output-bytes', '4096']);
 
@@ -331,6 +379,41 @@ test('marks syntactic reference evidence incomplete when reference edges exceed 
     { reason: 'output-budget', count: value.syntacticReferences.total - value.syntacticReferences.retained },
     { reason: 'unsupported-or-missing-object', count: 120 },
   ]);
+  assert.deepEqual(value.files.largest, []);
+  assert.deepEqual(value.history.fileFrequency, []);
+  assert.deepEqual(value.agentSurfaces, []);
+  assert.deepEqual(value.workflows, []);
+  assert.deepEqual(value.packageScripts, []);
+  assert.ok(value.truncation.sectionsTruncated.includes('files.largest'));
+  assert.ok(value.truncation.sectionsTruncated.includes('history.fileFrequency'));
+  assert.ok(value.truncation.sectionsTruncated.includes('agentSurfaces'));
+  assert.ok(value.truncation.sectionsTruncated.includes('workflows'));
+  assert.ok(value.truncation.sectionsTruncated.includes('packageScripts'));
+  assert.equal(value.truncation.itemsReturned,
+    value.instructionSurfaceCandidates.retained + value.syntacticReferences.retained);
+});
+
+test('bounds adversarial reference fan-out before target content reads and marks traversal incomplete', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-reference-fanout-'));
+  await mkdir(join(root, 'docs'));
+  const links = [];
+  for (let index = 0; index < 300; index += 1) {
+    const name = `target-${String(index).padStart(3, '0')}.md`;
+    links.push(`[target](docs/${name})`);
+    await writeFile(join(root, 'docs', name), `[more](nested-${String(index).padStart(3, '0')}.md)\n`);
+  }
+  await writeFile(join(root, 'AGENTS.md'), `${links.join('\n')}\n`);
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root);
+
+  assert.ok(Buffer.byteLength(raw) <= 32 * 1024);
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.equal(value.syntacticReferences.total, 128);
+  assert.equal(value.syntacticReferences.retained, 128);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [{ reason: 'traversal-budget', count: 172 }]);
+  assert.equal(value.evidenceProvenance.snapshot.contentFilesInspected, 1);
 });
 
 test('walks a three-hop snapshot reference chain with line, hop, and target byte facts while breaking cycles', async () => {
