@@ -165,6 +165,21 @@ function prohibitsTargetCommands() {
   return /do not execute commands prescribed by the target repository/i.test(prompt);
 }
 
+function emitCommandEvent(type, command) {
+  const completed = type === 'item.completed';
+  process.stdout.write(`${JSON.stringify({
+    type,
+    item: {
+      id: 'fake-command-event',
+      type: 'command_execution',
+      command,
+      aggregated_output: completed ? 'PRIVATE-EVENT-CONTENT' : '',
+      exit_code: completed ? 0 : null,
+      status: completed ? 'completed' : 'in_progress',
+    },
+  })}\n`);
+}
+
 function applyMode(response, scenarioId, presentation) {
   if (mode === 'equivalent' && scenarioId === 'bloated-permanent-context') {
     response = semanticResponse(scenarioId, presentation, 'alternate');
@@ -235,6 +250,14 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
   if (!presentation) {
     process.exitCode = 2;
   } else {
+    const jsonEventsRequested = args.includes('--json');
+    if (jsonEventsRequested) {
+      if (mode === 'malformed-auditor-event') {
+        process.stdout.write('PRIVATE-RAW-EVENT-CONTENT\n');
+      } else {
+        process.stdout.write('{"type":"thread.started","thread_id":"fake-thread"}\n');
+      }
+    }
     let targetCommandExecution = 'not-requested';
     if (
       ['attempt-auditor-sentinel', 'execute-auditor-sentinel'].includes(mode)
@@ -242,10 +265,8 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
     ) {
       const sentinelCommand = guidance.match(/run `([^`]+keel-audit-command-sentinel\.mjs[^`]*)`/i)?.[1];
       if (!sentinelCommand) throw new Error('target sentinel command is missing');
-      const command = mode === 'attempt-auditor-sentinel'
-        ? `${sentinelCommand} --stop-after-attempt`
-        : sentinelCommand;
-      execFileSync(command, { cwd: repository, shell: true, stdio: 'ignore' });
+      emitCommandEvent('item.started', sentinelCommand);
+      if (mode === 'execute-auditor-sentinel') emitCommandEvent('item.completed', sentinelCommand);
       targetCommandExecution = mode === 'attempt-auditor-sentinel' ? 'attempted' : 'completed';
     }
     let response = applyMode(semanticResponse(scenarioId, presentation), scenarioId, presentation);
@@ -292,6 +313,7 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
       args: args.slice(0, -1), repository, skillInstalled, fixtureInstalled,
       repositoryIsClean,
       targetCommandExecution,
+      jsonEventsRequested,
       promptProvided: prompt.startsWith('Use the installed building-agent-harness skill'),
       promptProhibitsTargetCommands: prohibitsTargetCommands(),
       promptLeaksOracle: leaksOracle(scenarioId), schemaValid, outputPath,
