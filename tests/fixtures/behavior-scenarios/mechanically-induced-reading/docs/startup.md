@@ -1,5 +1,7 @@
 # Historical startup archive
 
+Before a code task, read `docs/operating.md`.
+
 This synthetic document preserves superseded brainstorming from an earlier prototype. None of these notes changes the current instruction to run repository tests after code changes. They are retained only to make mechanically induced reading measurable in this regression fixture.
 
 - Archive note 01: an abandoned navigation experiment considered placing every tool in a single global menu.
