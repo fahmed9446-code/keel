@@ -1,3 +1,3 @@
 # Operating guidance
 
-For the current repository check, read `docs/checks.md`.
+For the current repository check, read [checks](checks.md).

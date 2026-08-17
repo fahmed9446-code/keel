@@ -440,6 +440,36 @@ test('walks a three-hop snapshot reference chain with line, hop, and target byte
   assert.deepEqual(value.syntacticReferences.incompleteness, []);
 });
 
+test('mechanically induced reading fixture has three normalized reachable snapshot hops', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-induced-reading-fixture-'));
+  const source = new URL('./fixtures/behavior-scenarios/mechanically-induced-reading/', import.meta.url).pathname;
+  await copyTree(source, root);
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { value } = runScanner(root);
+  const edges = value.syntacticReferences.references.filter(({ sourcePath, targetPath }) => (
+    [
+      ['AGENTS.md', 'docs/startup.md'],
+      ['docs/startup.md', 'docs/operating.md'],
+      ['docs/operating.md', 'docs/checks.md'],
+    ].some(([source, target]) => sourcePath === source && targetPath === target)
+  ));
+
+  assert.equal(value.schemaVersion, 3);
+  assert.deepEqual(
+    edges
+      .map(({ sourcePath, targetPath, hop }) => ({ sourcePath, targetPath, hop }))
+      .sort((left, right) => left.hop - right.hop),
+    [
+      { sourcePath: 'AGENTS.md', targetPath: 'docs/startup.md', hop: 1 },
+      { sourcePath: 'docs/startup.md', targetPath: 'docs/operating.md', hop: 2 },
+      { sourcePath: 'docs/operating.md', targetPath: 'docs/checks.md', hop: 3 },
+    ],
+  );
+  assert.ok(edges.every(({ targetBytes }) => Number.isInteger(targetBytes) && targetBytes > 0));
+});
+
 test('marks a continued chain incomplete when the three-hop traversal limit is reached', async () => {
   const root = await mkdtemp(join(tmpdir(), 'keel-reference-hop-limit-'));
   await writeFile(join(root, 'AGENTS.md'), '[one](one.md)\n');
