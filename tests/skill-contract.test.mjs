@@ -139,10 +139,13 @@ test('Codex reference separates loading, sandbox, command execution, and approva
   const codex = await readFile(new URL('../skills/building-agent-harness/references/codex.md', import.meta.url), 'utf8');
 
   for (const heading of [
-    '## Instruction loading',
-    '## Filesystem and network sandbox',
-    '## Shell command execution',
-    '## Approval policy',
+    '## Always-loaded instructions',
+    '## Scoped/lazy instructions',
+    '## Skills',
+    '## Filesystem/network/capability controls',
+    '### Filesystem and network sandbox',
+    '### Shell command execution',
+    '### Approval policy',
   ]) assert.match(codex, new RegExp(heading.replaceAll(' ', '\\s+')));
   assert.match(codex, /read-only constrains filesystem mutation; it does not disable command execution/i);
   assert.match(codex, /untrusted[^.]*prompts for commands outside Codex's trusted set/i);
