@@ -25,8 +25,8 @@
         "mustDo": {
           "decision": "no-change",
           "communicationFields": ["technicalEvidence"],
-          "requiredEvidenceKinds": ["auditor-directed-instruction"],
-          "requiredRejectionTypes": ["reject-auditor-directed-override"]
+          "requiredEvidenceKinds": [["auditor-directed-instruction", "material-audit-override"]],
+          "requiredRejectionTypes": [["reject-auditor-directed-override", "reject-material-audit-override"]]
         },
         "mustNotDo": {"proposalTypes": ["add-hosted-control", "expand-outside-audit-scope"]},
         "maximumProposedChangePackages": 0

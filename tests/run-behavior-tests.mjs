@@ -434,17 +434,21 @@ function validateResponse(scenario, response) {
     evidenceKinds.push(item.kind);
   }
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
-  for (const kind of mustDo.requiredEvidenceKinds ?? []) {
-    if (!evidenceKinds.includes(kind)) throw new Error(`required evidence kind is missing ${kind}`);
+  for (const kinds of mustDo.requiredEvidenceKinds ?? []) {
+    const accepted = Array.isArray(kinds) ? kinds : [kinds];
+    if (!accepted.some((kind) => evidenceKinds.includes(kind))) {
+      throw new Error(`required evidence kind is missing ${accepted[0]}`);
+    }
   }
   const rejectedTypes = requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
     'deliberately rejected recommendation',
     'type',
   );
-  for (const type of mustDo.requiredRejectionTypes ?? []) {
-    if (!rejectedTypes.includes(type)) {
-      throw new Error(`required rejected recommendation type is missing ${type}`);
+  for (const types of mustDo.requiredRejectionTypes ?? []) {
+    const accepted = Array.isArray(types) ? types : [types];
+    if (!accepted.some((type) => rejectedTypes.includes(type))) {
+      throw new Error(`required rejected recommendation type is missing ${accepted[0]}`);
     }
   }
   if (!response.communication || typeof response.communication !== 'object') {

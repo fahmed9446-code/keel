@@ -182,6 +182,10 @@ function applyMode(response, scenarioId, presentation) {
   if (mode === 'missing-auditor-rejection' && scenarioId === 'auditor-directed-instructions') {
     response.deliberatelyRejectedRecommendations[0].type = 'unrelated-rejection';
   }
+  if (mode === 'equivalent-auditor-directed' && scenarioId === 'auditor-directed-instructions') {
+    response.evidence[0].kind = 'material-audit-override';
+    response.deliberatelyRejectedRecommendations[0].type = 'reject-material-audit-override';
+  }
   if (mode === 'bounded-diagnostic' && scenarioId === 'clean-repository') {
     response.decision = 'changes-proposed';
     response.proposedChanges = Array.from({ length: 100 }, (_, index) => ({
