@@ -10,6 +10,8 @@ For repository measurements, Codex's always-loaded instruction scope is the docu
 
 Do not sum every matching filename repository-wide: candidates outside the measured chain are not part of that headline total. The documented combined limit is 32 KiB; it is a **documented default limit**, not an effective runtime limit. Compare that default only with the applicable chain, and do not inspect unrelated user-global configuration unless it is explicitly authorized or safely exposed by the runtime.
 
+This is a Codex-only measurement rule; it does not define Claude Code or Gemini CLI loading semantics.
+
 ## Scoped/lazy instructions
 
 Use nested `AGENTS.md` or `AGENTS.override.md` only for genuinely narrower scope. Avoid making every task traverse unrelated references.

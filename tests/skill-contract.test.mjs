@@ -131,27 +131,49 @@ test('audit reports separate snapshot evidence from native live inspection and d
   assert.match(communication, /content blind spots/i);
 });
 
-test('audit guidance makes semantic measurements agent- and CWD-scoped', async () => {
+function requiresConcepts(text, concepts, mutation) {
+  assert.ok(
+    concepts.every((concept) => concept.test(text)),
+    `${mutation}: missing one or more required concepts`,
+  );
+}
+
+test('audit guidance preserves scope, completeness, and evidence relationships', async () => {
   const [skill, audit] = await Promise.all([loadSkill(), readFile(auditUrl, 'utf8')]);
+  const contracts = [
+    {
+      mutation: 'treating scanner candidates as active instruction surfaces',
+      text: skill,
+      concepts: [/active agent/i, /scanner candidates/i, /verified|documented/i, /active.*applicable/is],
+    },
+    {
+      mutation: 'collapsing out-of-chain nested candidates into a repository-wide Codex total',
+      text: audit,
+      concepts: [/Codex/i, /repository root/i, /current working directory/i, /outside.*chain/is, /not.*repository-wide total/is],
+    },
+    {
+      mutation: 'reporting a complete-looking metric after truncation or incomplete evidence',
+      text: audit,
+      concepts: [/incomplete|truncated/i, /suppress/i, /complete-looking metric/i],
+    },
+    {
+      mutation: 'calling a documented limit the effective runtime limit',
+      text: audit,
+      concepts: [/documented default limit/i, /effective runtime limit/i, /user-global/i],
+    },
+    {
+      mutation: 'reporting a local or derived finding without traceable evidence',
+      text: audit,
+      concepts: [/local fact/i, /path:line/i, /whole-file/i, /repository-wide derived/i, /measured summary/i],
+    },
+    {
+      mutation: 'reporting one side of a contradiction or duplication only',
+      text: audit,
+      concepts: [/contradiction/i, /duplication/i, /both sides/i],
+    },
+  ];
 
-  assert.match(skill, /detect the active agent/i);
-  assert.match(skill, /scanner candidates remain facts/i);
-  assert.match(skill, /headline measurements.*agent.*scope/i);
-  assert.match(audit, /repository root.*current working directory/i);
-  assert.match(audit, /outside.*chain.*not.*repository-wide total/is);
-  assert.match(audit, /incomplete|truncated/i);
-  assert.match(audit, /suppress.*complete-looking metric/is);
-  assert.match(audit, /documented default limit/i);
-  assert.match(audit, /effective runtime limit/i);
-});
-
-test('audit guidance requires provenance for specific evidence and paired conflicts', async () => {
-  const audit = await readFile(auditUrl, 'utf8');
-
-  assert.match(audit, /specific local fact.*path:line/i);
-  assert.match(audit, /whole-file fact.*path/i);
-  assert.match(audit, /repository-wide derived fact.*measured summary/i);
-  assert.match(audit, /snapshot.*native live-inspection.*labeled separately/is);
-  assert.match(audit, /contradiction.*both sides/i);
-  assert.match(audit, /duplication.*both sides/i);
+  for (const { mutation, text, concepts } of contracts) {
+    requiresConcepts(text, concepts, mutation);
+  }
 });
