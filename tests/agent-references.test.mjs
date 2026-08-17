@@ -4,19 +4,6 @@ import test from 'node:test';
 
 const referenceRoot = new URL('../skills/building-agent-harness/references/', import.meta.url);
 const names = ['codex.md', 'claude-code.md', 'gemini-cli.md'];
-const headings = [
-  'Detection',
-  'Always-loaded instructions',
-  'Scoped/lazy instructions',
-  'Skills',
-  'Task memory',
-  'Filesystem/network/capability controls',
-  'Independent-review options',
-  'Native install locations',
-  'Known limitations',
-  'Installation validation',
-  'Capability baseline',
-];
 
 function section(text, heading) {
   const start = text.indexOf(`## ${heading}`);
@@ -35,9 +22,36 @@ function requiresConcepts(text, concepts, mutation) {
 test('agent references share a document shape without an adapter interface', async () => {
   for (const name of names) {
     const text = await readFile(new URL(name, referenceRoot), 'utf8');
+    const shape = name === 'codex.md'
+      ? [
+        'Detection',
+        'Instruction loading',
+        'Task memory',
+        'Filesystem and network sandbox',
+        'Shell command execution',
+        'Approval policy',
+        'Independent-review options',
+        'Native install locations',
+        'Known limitations',
+        'Installation validation',
+        'Capability baseline',
+      ]
+      : [
+        'Detection',
+        'Always-loaded instructions',
+        'Scoped/lazy instructions',
+        'Skills',
+        'Task memory',
+        'Filesystem/network/capability controls',
+        'Independent-review options',
+        'Native install locations',
+        'Known limitations',
+        'Installation validation',
+        'Capability baseline',
+      ];
     let cursor = -1;
-    for (const heading of headings) {
-      const next = text.indexOf(`## ${heading}`);
+    for (const heading of shape) {
+      const next = text.search(new RegExp(`^## ${heading.replaceAll(' ', '\\s+')}$`, 'm'));
       assert.ok(next > cursor, `${name}: ${heading} missing or out of order`);
       cursor = next;
     }
