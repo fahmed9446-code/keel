@@ -230,7 +230,7 @@ test('README describes the durable behavior runner without remediation history',
   assert.doesNotMatch(development, /alias|breaker|diagnostic cycle|historical live-run/i);
 });
 
-test('README keeps scanner schema 2 and state schema 2 claims consistent with public contracts', async () => {
+test('README keeps schema 3 evidence, scope, trust, and version claims consistent with public contracts', async () => {
   const [readme, contract, manifestText] = await Promise.all([
     loadReadme(),
     readFile(installationContractUrl, 'utf8'),
@@ -241,13 +241,22 @@ test('README keeps scanner schema 2 and state schema 2 claims consistent with pu
   assert.ok(stateMatch, 'installation contract must contain a state example');
   const state = JSON.parse(stateMatch[1]);
 
-  assert.equal(manifest.version, '1.0.2');
+  assert.equal(manifest.version, '1.0.3');
   assert.equal(state.schemaVersion, 2);
   assert.equal(state.keelVersion, manifest.version);
-  assert.match(readme, /scanner schema 2/i);
+  assert.match(readme, /scanner schema 3/i);
   assert.match(readme, /registry `2026-08-14\.2`/i);
   assert.match(readme, /Git index\/blob snapshot/i);
   assert.match(readme, /path-status-only live facts/i);
+  assert.match(readme, /instruction[- ]surface candidates/i);
+  assert.match(readme, /syntactic reference edges/i);
+  assert.match(readme, /active agent.*current working directory/i);
+  assert.match(readme, /nested candidates.*outside.*chain.*not.*headline total/is);
+  assert.match(readme, /documented default limit.*effective runtime limit/i);
+  assert.match(readme, /path:line/i);
+  assert.match(readme, /snapshot.*native live inspection.*separately/is);
+  assert.match(readme, /target-repository prose.*untrusted audit evidence/i);
+  assert.match(readme, /cannot change Keel's audit method.*approval boundary.*report contract.*five-package cap/is);
   assert.match(readme, /32 KiB/);
   assert.match(readme, /4 KiB/);
   assert.match(readme, /--max-output-bytes[^.]*raise[^.]*32 KiB default/is);
