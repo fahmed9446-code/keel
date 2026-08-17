@@ -6,7 +6,7 @@ import { devNull } from 'node:os';
 import { basename, posix, resolve, sep } from 'node:path';
 import { AGENT_SURFACES, KNOWN_WORKFLOW_PATTERNS, REGISTRY_VERSION } from './agent-surfaces.mjs';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const DEFAULT_MAX_BYTES = 32 * 1024;
 const MIN_MAX_BYTES = 4 * 1024;
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
@@ -334,21 +334,24 @@ function normalizeReference(sourcePath, target) {
 function extractReferences(sourcePath, text) {
   const values = [];
   const seen = new Set();
-  const add = (target, syntax) => {
+  const add = (target, syntax, sourceLine) => {
     const normalized = normalizeReference(sourcePath, target);
-    if (!normalized || sensitiveCategory(normalized)) return;
-    const key = `${normalized}\0${syntax}`;
+    if (!normalized) return;
+    const key = `${sourceLine}\0${normalized}\0${syntax}`;
     if (seen.has(key)) return;
     seen.add(key);
-    values.push({ sourcePath, target: normalized, syntax });
+    values.push({ sourcePath, sourceLine, targetPath: normalized, syntax });
   };
-  for (const match of text.matchAll(/\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))\s*\)/g)) add(match[1] ?? match[2], 'markdown-link');
-  for (const match of text.matchAll(/`((?:\.?\.?\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+)`/g)) add(match[1], 'literal-path');
-  for (const line of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const sourceLine = index + 1;
+    for (const match of line.matchAll(/\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))\s*\)/g)) add(match[1] ?? match[2], 'markdown-link', sourceLine);
+    for (const match of line.matchAll(/`((?:\.?\.?\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+)`/g)) add(match[1], 'literal-path', sourceLine);
     const include = line.match(/^\s*@((?:\.?\.?\/)?[^\s#]+)\s*$/);
-    if (include) add(include[1], 'known-include');
+    if (include) add(include[1], 'known-include', sourceLine);
     const checklist = line.match(/^\s*[-*]\s+((?:\.?\.?\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+)\s*$/);
-    if (checklist) add(checklist[1], 'startup-checklist-path');
+    if (checklist) add(checklist[1], 'startup-checklist-path', sourceLine);
   }
   return values;
 }
@@ -360,11 +363,11 @@ function createBlobReader(root) {
   const limitSkippedPaths = new Set();
   const failedPaths = new Set();
   return {
-    read(entry) {
+    readWithStatus(entry) {
       if (entry.bytes === null || entry.bytes > MAX_TEXT_FILE_BYTES) {
         skippedPaths.add(entry.path);
         if (entry.bytes !== null) limitSkippedPaths.add(entry.path);
-        return null;
+        return { text: null, reason: entry.bytes === null ? 'bytes-unavailable' : 'size-admission-refused' };
       }
       let result = cache.get(entry.oid);
       if (result === undefined) {
@@ -373,7 +376,10 @@ function createBlobReader(root) {
       }
       if (result.text === null) failedPaths.add(entry.path);
       else inspectedPaths.add(entry.path);
-      return result.text;
+      return { text: result.text, reason: result.text === null ? 'git-read-failed' : null };
+    },
+    read(entry) {
+      return this.readWithStatus(entry).text;
     },
     stats() {
       return {
@@ -386,17 +392,105 @@ function createBlobReader(root) {
   };
 }
 
-function syntacticReferences(files, surfaces, reader) {
-  const candidates = new Set(surfaces.filter((item) => item.kind === 'instruction-file-candidate').map((item) => item.path));
+function instructionSurfaceCandidates(files, surfaces, pathsAvailable) {
+  const filesByPath = new Map(files.map((file) => [file.path, file]));
+  const candidates = surfaces
+    .filter((surface) => surface.kind === 'instruction-file-candidate')
+    .map((surface) => ({
+      path: surface.path,
+      bytes: filesByPath.get(surface.path)?.bytes ?? null,
+      agent: surface.agent,
+      kind: surface.kind,
+      source: surface.source,
+      scopePath: posix.dirname(surface.path),
+    }));
+  return {
+    complete: pathsAvailable && candidates.every((candidate) => candidate.bytes !== null),
+    total: pathsAvailable ? candidates.length : null,
+    retained: candidates.length,
+    candidates,
+  };
+}
+
+function incrementReason(counts, reason, count = 1) {
+  counts.set(reason, (counts.get(reason) ?? 0) + count);
+}
+
+function syntacticReferences(entries, candidates, reader, pathsAvailable) {
+  const entriesByPath = new Map(entries.filter((entry) => entry.stage === 0).map((entry) => [entry.path, entry]));
+  const rootPaths = [...new Set(candidates.candidates.map((item) => item.path))].sort(codeUnitCompare);
   const references = [];
-  for (const file of files) {
-    if (!candidates.has(file.path) || sensitiveCategory(file.path)) continue;
-    const text = reader.read(file);
-    if (text === null) continue;
-    references.push(...extractReferences(file.path, text));
+  const incomplete = new Map();
+  if (!pathsAvailable) incrementReason(incomplete, 'git-snapshot-unavailable');
+  const visited = new Set(rootPaths);
+  const queue = rootPaths.map((path) => ({ path, hop: 0 }));
+  for (let index = 0; index < queue.length; index += 1) {
+    const source = queue[index];
+    const sourceEntry = entriesByPath.get(source.path);
+    if (!sourceEntry || !REGULAR_FILE_MODES.has(sourceEntry.mode)) {
+      incrementReason(incomplete, 'unsupported-or-missing-object');
+      continue;
+    }
+    const read = reader.readWithStatus(sourceEntry);
+    if (read.text === null) {
+      incrementReason(incomplete, read.reason);
+      continue;
+    }
+    const extracted = extractReferences(source.path, read.text);
+    if (source.hop === 3) {
+      if (extracted.length > 0) incrementReason(incomplete, 'hop-limit', extracted.length);
+      continue;
+    }
+    for (const reference of extracted) {
+      const hop = source.hop + 1;
+      if (sensitiveCategory(reference.targetPath)) {
+        incrementReason(incomplete, 'sensitive-target-refused');
+        continue;
+      }
+      const target = entriesByPath.get(reference.targetPath);
+      const targetIsRegular = target && REGULAR_FILE_MODES.has(target.mode);
+      references.push({
+        ...reference,
+        hop,
+        targetBytes: targetIsRegular ? target.bytes : null,
+      });
+      if (!target) {
+        incrementReason(incomplete, 'unsupported-or-missing-object');
+        continue;
+      }
+      if (!targetIsRegular) {
+        incrementReason(incomplete, target.mode === '120000' ? 'symbolic-link-refused' : 'unsupported-or-missing-object');
+        continue;
+      }
+      if (target.bytes === null) {
+        incrementReason(incomplete, 'bytes-unavailable');
+        continue;
+      }
+      if (target.bytes > MAX_TEXT_FILE_BYTES) {
+        incrementReason(incomplete, 'size-admission-refused');
+        continue;
+      }
+      if (!visited.has(target.path)) {
+        visited.add(target.path);
+        queue.push({ path: target.path, hop });
+      }
+    }
   }
-  references.sort((left, right) => codeUnitCompare(left.sourcePath, right.sourcePath) || codeUnitCompare(left.target, right.target) || codeUnitCompare(left.syntax, right.syntax));
-  return { total: references.length, references };
+  references.sort((left, right) => codeUnitCompare(left.sourcePath, right.sourcePath)
+    || left.sourceLine - right.sourceLine
+    || codeUnitCompare(left.targetPath, right.targetPath)
+    || codeUnitCompare(left.syntax, right.syntax)
+    || left.hop - right.hop);
+  const incompleteness = [...incomplete]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((left, right) => codeUnitCompare(left.reason, right.reason));
+  return {
+    complete: incompleteness.length === 0,
+    total: pathsAvailable ? references.length : null,
+    retained: references.length,
+    references,
+    incompleteness,
+  };
 }
 
 function packageScripts(files, reader) {
@@ -422,6 +516,7 @@ function workflowFiles(files) {
 function itemCount(report) {
   return report.files.largest.length
     + report.agentSurfaces.length
+    + report.instructionSurfaceCandidates.candidates.length
     + report.syntacticReferences.references.length
     + report.packageScripts.length
     + report.workflows.length
@@ -440,18 +535,33 @@ function enforceBudget(report, maxBytes) {
   const sections = [
     ['files.largest', report.files.largest, 50],
     ['history.fileFrequency', report.history.fileFrequency, 50],
-    ['syntacticReferences.references', report.syntacticReferences.references, 50],
     ['agentSurfaces', report.agentSurfaces, 50],
     ['workflows', report.workflows, 25],
     ['packageScripts', report.packageScripts, 50],
     ['sensitiveIndicators.paths', report.sensitiveIndicators.paths, 25],
+    ['syntacticReferences.references', report.syntacticReferences.references, 100],
+    ['instructionSurfaceCandidates.candidates', report.instructionSurfaceCandidates.candidates, 100],
   ].filter(([, array]) => Array.isArray(array));
   const mark = (name) => {
     if (!report.truncation.sectionsTruncated.includes(name)) report.truncation.sectionsTruncated.push(name);
+    if (name === 'instructionSurfaceCandidates.candidates') {
+      report.instructionSurfaceCandidates.complete = false;
+      report.instructionSurfaceCandidates.retained = report.instructionSurfaceCandidates.candidates.length;
+    }
+    if (name === 'syntacticReferences.references') {
+      report.syntacticReferences.complete = false;
+      report.syntacticReferences.retained = report.syntacticReferences.references.length;
+      const outputBudget = report.syntacticReferences.incompleteness.find((item) => item.reason === 'output-budget');
+      const omitted = report.syntacticReferences.total - report.syntacticReferences.references.length;
+      if (outputBudget) outputBudget.count = omitted;
+      else report.syntacticReferences.incompleteness.push({ reason: 'output-budget', count: omitted });
+      report.syntacticReferences.incompleteness.sort((left, right) => codeUnitCompare(left.reason, right.reason));
+    }
   };
   if (Buffer.byteLength(serialize(report)) > maxBytes) {
     report.truncation.truncated = true;
     for (const [name, array, cap] of sections) {
+      if (Buffer.byteLength(serialize(report)) <= maxBytes) break;
       if (array.length > cap) {
         array.splice(cap);
         mark(name);
@@ -468,6 +578,8 @@ function enforceBudget(report, maxBytes) {
     report.truncation.itemsReturned = itemCount(report);
     guard += 1;
   }
+  report.instructionSurfaceCandidates.retained = report.instructionSurfaceCandidates.candidates.length;
+  report.syntacticReferences.retained = report.syntacticReferences.references.length;
   report.truncation.itemsReturned = itemCount(report);
   if (Buffer.byteLength(serialize(report)) > maxBytes) throw new Error(`minimum report exceeds ${maxBytes} bytes`);
   return serialize(report);
@@ -514,7 +626,8 @@ function nonGitReport(rootName, options) {
     contentBlindSpots: { dirtyFiles: null, untrackedFiles: null, ignoredFiles: null, total: null },
     files: { total: null, totalBytes: null, skippedSymbolicLinks: 0, largest: [] },
     agentSurfaces: [],
-    syntacticReferences: { total: 0, references: [] },
+    instructionSurfaceCandidates: { complete: false, total: null, retained: 0, candidates: [] },
+    syntacticReferences: { complete: false, total: null, retained: 0, references: [], incompleteness: [{ reason: 'git-snapshot-unavailable', count: 1 }] },
     packageScripts: [],
     workflows: [],
     history: emptyHistory(),
@@ -550,8 +663,9 @@ function buildGitReport(rootName, root, gitData, options) {
   const visibleFiles = regularFiles.filter((file) => !sensitiveCategory(file.path));
   const visibleDirectories = new Set([...inferredDirectories(visibleFiles)].filter((path) => !sensitiveCategory(path)));
   const agentSurfaces = registryMatches(visibleFiles, visibleDirectories);
+  const instructionCandidates = instructionSurfaceCandidates(visibleFiles, agentSurfaces, gitData.entries !== null);
   const reader = createBlobReader(root);
-  const references = syntacticReferences(visibleFiles, agentSurfaces, reader);
+  const references = syntacticReferences(gitData.entries ?? [], instructionCandidates, reader, gitData.entries !== null);
   const scripts = packageScripts(visibleFiles, reader);
   const readerStats = reader.stats();
   const knownPaths = new Set([
@@ -646,6 +760,7 @@ function buildGitReport(rootName, root, gitData, options) {
         .sort((left, right) => right.bytes - left.bytes || codeUnitCompare(left.path, right.path)),
     },
     agentSurfaces,
+    instructionSurfaceCandidates: instructionCandidates,
     syntacticReferences: references,
     packageScripts: scripts,
     workflows: workflowFiles(visibleFiles),

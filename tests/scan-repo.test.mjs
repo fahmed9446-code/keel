@@ -149,7 +149,7 @@ test('reads staged index content while reporting unstaged working-copy content a
   const { value } = runScanner(root);
 
   assert.deepEqual(value.syntacticReferences.references, [
-    { sourcePath: 'AGENTS.md', target: 'docs/staged.md', syntax: 'markdown-link' },
+    { sourcePath: 'AGENTS.md', sourceLine: 1, targetPath: 'docs/staged.md', syntax: 'markdown-link', hop: 1, targetBytes: null },
   ]);
   assert.equal(value.evidenceProvenance.snapshot.kind, 'git-index-blob-snapshot');
   assert.equal(value.evidenceProvenance.livePathStatus.dirtyPaths, 1);
@@ -172,6 +172,8 @@ test('requires native inspection when an oversized snapshot content candidate is
   assert.equal(value.nativeLiveInspectionRequired.required, true);
   assert.ok(value.nativeLiveInspectionRequired.reasons.includes('snapshot-content-limit-exceeded'));
   assert.ok(value.warnings.includes('Some snapshot content candidates exceeded the inspection limit; content evidence is incomplete.'));
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [{ reason: 'size-admission-refused', count: 1 }]);
   assert.doesNotMatch(raw, /oversized-reference/);
 });
 
@@ -190,6 +192,8 @@ test('requires native inspection when a snapshot candidate blob read fails', asy
   assert.equal(value.nativeLiveInspectionRequired.required, true);
   assert.ok(value.nativeLiveInspectionRequired.reasons.includes('snapshot-content-read-failed'));
   assert.ok(value.warnings.includes('Some snapshot content candidates could not be read from Git objects; content evidence is incomplete.'));
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [{ reason: 'git-read-failed', count: 1 }]);
   assert.doesNotMatch(raw, /failed-reference/);
 });
 
@@ -225,7 +229,13 @@ test('fails closed without enumerating or reading a non-Git repository', async (
   assert.equal(value.files.totalBytes, null);
   assert.deepEqual(value.files.largest, []);
   assert.deepEqual(value.agentSurfaces, []);
-  assert.deepEqual(value.syntacticReferences, { total: 0, references: [] });
+  assert.deepEqual(value.syntacticReferences, {
+    complete: false,
+    total: null,
+    retained: 0,
+    references: [],
+    incompleteness: [{ reason: 'git-snapshot-unavailable', count: 1 }],
+  });
   assert.deepEqual(value.packageScripts, []);
   assert.equal(value.evidenceProvenance.snapshot.available, false);
   assert.equal(value.evidenceProvenance.livePathStatus.available, false);
@@ -237,19 +247,167 @@ test('fails closed without enumerating or reading a non-Git repository', async (
   assert.doesNotMatch(raw, /AGENTS\.md|private\.md|private-script/);
 });
 
-test('reports schema 2 neutral scanner evidence', async () => {
+test('reports schema 3 neutral scanner evidence', async () => {
   const root = await snapshotFixtureRepository();
   const { value } = runScanner(root);
-  assert.equal(value.schemaVersion, 2);
+  assert.equal(value.schemaVersion, 3);
   assert.equal(value.registryVersion, '2026-08-14.2');
   assert.ok(value.agentSurfaces.some((item) => item.path === 'AGENTS.md' && item.agent === 'codex' && item.kind === 'instruction-file-candidate'));
   assert.ok(value.agentSurfaces.some((item) => item.path === 'CLAUDE.md' && item.agent === 'claude-code' && item.kind === 'instruction-file-candidate'));
   assert.ok(value.agentSurfaces.some((item) => item.path === 'GEMINI.md' && item.agent === 'gemini-cli' && item.kind === 'instruction-file-candidate'));
   assert.deepEqual([...new Set(value.agentSurfaces.map((item) => item.kind))], ['instruction-file-candidate']);
-  assert.ok(value.syntacticReferences.references.some((item) => item.sourcePath === 'AGENTS.md' && item.target === 'docs/architecture.md' && item.syntax === 'markdown-link'));
-  assert.ok(value.syntacticReferences.references.some((item) => item.target === 'docs/runbook.md' && item.syntax === 'literal-path'));
+  assert.ok(value.syntacticReferences.references.some((item) => item.sourcePath === 'AGENTS.md' && item.targetPath === 'docs/architecture.md' && item.syntax === 'markdown-link'));
+  assert.ok(value.syntacticReferences.references.some((item) => item.targetPath === 'docs/runbook.md' && item.syntax === 'literal-path'));
   assert.equal('inducedReading' in value, false);
   assert.deepEqual(value.packageScripts, ['check', 'test']);
+});
+
+test('keeps instruction path and byte evidence independent of generic largest-file truncation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-instruction-priority-'));
+  await writeFile(join(root, 'AGENTS.md'), '# scoped instructions\n');
+  for (let index = 0; index < 425; index += 1) {
+    const name = `generic-${String(index).padStart(3, '0')}-${'x'.repeat(32)}.md`;
+    await writeFile(join(root, name), `${'g'.repeat(256)}${index}\n`);
+  }
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root, ['--max-output-bytes', '4096']);
+
+  assert.ok(Buffer.byteLength(raw) <= 4096);
+  assert.equal(value.truncation.truncated, true);
+  assert.deepEqual(value.instructionSurfaceCandidates, {
+    complete: true,
+    total: 1,
+    retained: 1,
+    candidates: [{
+      path: 'AGENTS.md',
+      bytes: 22,
+      agent: 'codex',
+      kind: 'instruction-file-candidate',
+      source: 'registry',
+      scopePath: '.',
+    }],
+  });
+  assert.ok(value.files.largest.length < 425);
+  assert.equal(value.truncation.sectionsTruncated.includes('instructionSurfaceCandidates.candidates'), false);
+});
+
+test('discloses total and retained instruction counts when the instruction lane itself is truncated', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-instruction-truncation-'));
+  for (let index = 0; index < 120; index += 1) {
+    const directory = join(root, `package-${String(index).padStart(3, '0')}`);
+    await mkdir(directory);
+    await writeFile(join(directory, 'AGENTS.md'), `${index}\n`);
+  }
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root, ['--max-output-bytes', '4096']);
+
+  assert.ok(Buffer.byteLength(raw) <= 4096);
+  assert.equal(value.instructionSurfaceCandidates.complete, false);
+  assert.equal(value.instructionSurfaceCandidates.total, 120);
+  assert.equal(value.instructionSurfaceCandidates.retained, value.instructionSurfaceCandidates.candidates.length);
+  assert.ok(value.instructionSurfaceCandidates.retained < value.instructionSurfaceCandidates.total);
+  assert.ok(value.truncation.sectionsTruncated.includes('instructionSurfaceCandidates.candidates'));
+});
+
+test('marks syntactic reference evidence incomplete when reference edges exceed the output budget', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-reference-truncation-'));
+  const links = Array.from({ length: 120 }, (_, index) => `[ref](docs/missing-${String(index).padStart(3, '0')}.md)`).join('\n');
+  await writeFile(join(root, 'AGENTS.md'), `${links}\n`);
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root, ['--max-output-bytes', '4096']);
+
+  assert.ok(Buffer.byteLength(raw) <= 4096);
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.equal(value.syntacticReferences.total, 120);
+  assert.equal(value.syntacticReferences.retained, value.syntacticReferences.references.length);
+  assert.ok(value.syntacticReferences.retained < value.syntacticReferences.total);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [
+    { reason: 'output-budget', count: value.syntacticReferences.total - value.syntacticReferences.retained },
+    { reason: 'unsupported-or-missing-object', count: 120 },
+  ]);
+});
+
+test('walks a three-hop snapshot reference chain with line, hop, and target byte facts while breaking cycles', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-reference-chain-'));
+  await mkdir(join(root, 'docs'), { recursive: true });
+  await writeFile(join(root, 'AGENTS.md'), '# root\n\n[first](docs/first.md)\n');
+  await writeFile(join(root, 'docs', 'first.md'), 'intro\n[second](second.md)\n');
+  await writeFile(join(root, 'docs', 'second.md'), '[cycle](../AGENTS.md)\n[third](third.md)\n');
+  await writeFile(join(root, 'docs', 'third.md'), 'terminal\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { value } = runScanner(root);
+
+  assert.deepEqual(value.syntacticReferences.references, [
+    { sourcePath: 'AGENTS.md', sourceLine: 3, targetPath: 'docs/first.md', syntax: 'markdown-link', hop: 1, targetBytes: 26 },
+    { sourcePath: 'docs/first.md', sourceLine: 2, targetPath: 'docs/second.md', syntax: 'markdown-link', hop: 2, targetBytes: 40 },
+    { sourcePath: 'docs/second.md', sourceLine: 1, targetPath: 'AGENTS.md', syntax: 'markdown-link', hop: 3, targetBytes: 31 },
+    { sourcePath: 'docs/second.md', sourceLine: 2, targetPath: 'docs/third.md', syntax: 'markdown-link', hop: 3, targetBytes: 9 },
+  ]);
+  assert.equal(value.syntacticReferences.complete, true);
+  assert.equal(value.syntacticReferences.total, 4);
+  assert.equal(value.syntacticReferences.retained, 4);
+  assert.deepEqual(value.syntacticReferences.incompleteness, []);
+});
+
+test('marks a continued chain incomplete when the three-hop traversal limit is reached', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-reference-hop-limit-'));
+  await writeFile(join(root, 'AGENTS.md'), '[one](one.md)\n');
+  await writeFile(join(root, 'one.md'), '[two](two.md)\n');
+  await writeFile(join(root, 'two.md'), '[three](three.md)\n');
+  await writeFile(join(root, 'three.md'), '[four](four.md)\n');
+  await writeFile(join(root, 'four.md'), 'not inspected\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { value } = runScanner(root);
+
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [{ reason: 'hop-limit', count: 1 }]);
+  assert.equal(value.syntacticReferences.references.some((item) => item.targetPath === 'four.md'), false);
+});
+
+test('reports nested instruction candidates as mechanical scope-path facts without active semantics', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-nested-candidate-'));
+  await mkdir(join(root, 'packages', 'api'), { recursive: true });
+  await writeFile(join(root, 'packages', 'api', 'AGENTS.md'), 'nested candidate\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root);
+
+  assert.deepEqual(value.instructionSurfaceCandidates.candidates, [{
+    path: 'packages/api/AGENTS.md',
+    bytes: 17,
+    agent: 'codex',
+    kind: 'instruction-file-candidate',
+    source: 'registry',
+    scopePath: 'packages/api',
+  }]);
+  assert.doesNotMatch(raw, /active|always.loaded|authoritative/i);
+});
+
+test('refuses sensitive reference targets without reading values and records incomplete traversal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'keel-sensitive-reference-'));
+  await writeFile(join(root, 'AGENTS.md'), '[private](secrets/token.md)\n');
+  await mkdir(join(root, 'secrets'));
+  await writeFile(join(root, 'secrets', 'token.md'), 'NEVER_EMIT_SYNTHETIC_SECRET_VALUE\n');
+  initializeRepository(root);
+  execFileSync('git', ['add', '.'], { cwd: root });
+
+  const { raw, value } = runScanner(root);
+
+  assert.deepEqual(value.syntacticReferences.references, []);
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [{ reason: 'sensitive-target-refused', count: 1 }]);
+  assert.doesNotMatch(raw, /secrets|token\.md|NEVER_EMIT_SYNTHETIC_SECRET_VALUE/);
 });
 
 test('emits neutral skill-directory candidates', async () => {
@@ -323,9 +481,11 @@ test('resolves syntactic references from their source and accepts angle-bracket 
   const { value } = runScanner(root);
   const references = value.syntacticReferences.references;
 
-  assert.ok(references.some((item) => item.sourcePath === 'docs/AGENTS.md' && item.target === 'docs/guides/setup guide.md'));
-  assert.ok(references.some((item) => item.sourcePath === 'docs/AGENTS.md' && item.target === 'README.md'));
-  assert.equal(references.some((item) => item.target.includes('outside.md')), false);
+  assert.ok(references.some((item) => item.sourcePath === 'docs/AGENTS.md' && item.targetPath === 'docs/guides/setup guide.md'));
+  assert.ok(references.some((item) => item.sourcePath === 'docs/AGENTS.md' && item.targetPath === 'README.md'));
+  assert.equal(references.some((item) => item.targetPath.includes('outside.md')), false);
+  assert.equal(value.syntacticReferences.complete, false);
+  assert.deepEqual(value.syntacticReferences.incompleteness, [{ reason: 'unsupported-or-missing-object', count: 1 }]);
 });
 
 test('redacts sensitive syntactic-reference targets even when the target is absent', async () => {
@@ -337,7 +497,7 @@ test('redacts sensitive syntactic-reference targets even when the target is abse
   const { raw, value } = runScanner(root);
 
   assert.deepEqual(value.syntacticReferences.references, [
-    { sourcePath: 'AGENTS.md', target: 'docs/guide.md', syntax: 'markdown-link' },
+    { sourcePath: 'AGENTS.md', sourceLine: 2, targetPath: 'docs/guide.md', syntax: 'markdown-link', hop: 1, targetBytes: null },
   ]);
   assert.doesNotMatch(raw, /secrets|credentials/);
 });
