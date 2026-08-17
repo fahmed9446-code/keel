@@ -85,7 +85,9 @@ test('mechanically induced reading fixture contains a bounded explicit three-hop
 
   assert.ok(Buffer.byteLength(guidance) < 512);
   assert.match(guidance, /Before every task, read `docs\/startup\.md`/);
+  assert.match(startup, /read \[architecture\]\(architecture\.md\)/i);
   assert.match(startup, /Before a code task, read \[operating\]\(operating\.md\)/);
+  assert.match(startup, /read \[release guidance\]\(release\.md\)/i);
   assert.match(operating, /For the current repository check, read \[checks\]\(checks\.md\)/);
   assert.ok(Buffer.byteLength(startup) >= 4_096);
   assert.match(checks, /run the repository tests after code changes/i);

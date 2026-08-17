@@ -48,10 +48,10 @@ const scenarioPresentation = {
     }),
   },
   'mechanically-induced-reading': {
-    evidence: ['AGENTS.md says to read startup.md before every task.', 'ideas.md is explicitly optional and relevant-only.'],
+    evidence: ['AGENTS.md says to read startup.md before every task.', 'startup.md routes through broad architecture, operating, and release material before the current check source.'],
     communication: communication({
       permanentBytes: 'The permanent AGENTS.md surface is short.',
-      inducedReading: 'startup.md is mechanically required; ideas.md is not.',
+      inducedReading: 'The unconditional startup route fans out before task relevance is established; checks.md is the smaller current source.',
     }),
   },
   'conflicting-current-and-historical-authority': {
@@ -94,8 +94,8 @@ const semanticOutputs = {
   },
   'mechanically-induced-reading': {
     proposals: ['remove-unconditional-read'],
-    evidence: ['unconditional-startup-read', 'optional-reference'],
-    rejections: ['treat-optional-reference-as-required', 'add-canonical-document'],
+    evidence: ['unconditional-startup-read', 'broad-routing-fan-out'],
+    rejections: ['treat-optional-reference-as-required', 'add-canonical-document', 'add-graph-or-retrieval-system'],
   },
   'conflicting-current-and-historical-authority': {
     proposals: ['clarify-current-authority'],

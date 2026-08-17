@@ -41,7 +41,7 @@ Use this complete state shape:
 ```json
 {
   "schemaVersion": 2,
-  "keelVersion": "1.0.4",
+  "keelVersion": "1.0.5",
   "installedChangeIds": ["context-trim-permanent-instructions"],
   "declinedOrDeferredChangeIds": [
     {

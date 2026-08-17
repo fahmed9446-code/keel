@@ -55,18 +55,18 @@
     },
     {
       "id": "mechanically-induced-reading",
-      "mustDo": ["Distinguish small permanent instructions from documents they mechanically require agents to open", "Identify only mechanically recognizable references"],
-      "mustNotDo": ["Infer implied reading from ambiguous prose", "Create a new canonical document when removing unconditional startup reads is sufficient"],
+      "mustDo": ["Distinguish small permanent instructions from documents they mechanically require agents to open", "Recognize an unconditional broad routing funnel before task relevance is established", "Identify only mechanically recognizable references", "Recommend the smallest route to the current authoritative source"],
+      "mustNotDo": ["Infer implied reading from ambiguous prose", "Create a new canonical document when removing unconditional startup reads is sufficient", "Recommend a graph or retrieval system for a problem solved by narrowing one startup route"],
       "outcomeContract": {
         "mustDo": {
           "decision": "changes-proposed",
           "anyProposalTypes": ["remove-unconditional-read", "reduce-permanent-context"],
           "communicationFields": ["permanentBytes", "inducedReading"]
         },
-        "mustNotDo": {"proposalTypes": ["treat-optional-reference-as-required", "add-canonical-document"]},
+        "mustNotDo": {"proposalTypes": ["treat-optional-reference-as-required", "add-canonical-document", "add-graph-or-retrieval-system"]},
         "maximumProposedChangePackages": 2
       },
-      "requirementSources": ["baseline:mechanically-induced-reading", "product:scanner-boundary"]
+      "requirementSources": ["baseline:mechanically-induced-reading", "product:scanner-boundary", "K105-01:navigation-architecture", "K105-03:evidence-backed-routing-facts"]
     },
     {
       "id": "conflicting-current-and-historical-authority",
