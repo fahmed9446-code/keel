@@ -238,6 +238,36 @@ test('audit guidance preserves scope, completeness, and evidence relationships',
       text: audit,
       concepts: [/contradiction/i, /duplication/i, /both sides/i],
     },
+    {
+      mutation: 'omitting the route from a fresh task to its smallest authoritative context',
+      text: audit,
+      concepts: [/capable fresh coding agent/i, /task|question/i, /smallest authoritative/i, /DISCOVERY.*ROUTING.*AUTHORITY.*SOURCE/is],
+    },
+    {
+      mutation: 'conflating broad repository orientation with task-specific context',
+      text: audit,
+      concepts: [/orientation context/i, /task-specific context/i, /small orientation|small.*router|small.*index/is],
+    },
+    {
+      mutation: 'trusting a derived routing artifact without a freshness model',
+      text: audit,
+      concepts: [/derived routing artifact/i, /source.*creates/is, /repository state|version/i, /refresh/i, /stale/i],
+    },
+    {
+      mutation: 'treating a map or index as automatic architectural authority',
+      text: audit,
+      concepts: [/map|index/i, /routing|orientation aid/i, /source.*authoritative|verify.*source/is],
+    },
+    {
+      mutation: 'turning routing measurements into quality scores or thresholds',
+      text: audit,
+      concepts: [/fan-out/i, /depth/i, /bytes/i, /facts/i, /not.*finding|not.*score|no threshold/is],
+    },
+    {
+      mutation: 'installing routing infrastructure for a small clear repository',
+      text: audit,
+      concepts: [/small repository/i, /No meaningful changes required/i, /knowledge graph|doc portal|retrieval service/i],
+    },
   ];
 
   for (const { mutation, text, concepts } of contracts) {

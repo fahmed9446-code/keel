@@ -28,7 +28,7 @@ These are potential benefits, not promised outcomes. Keel does not promise a per
 
 ## The simple idea
 
-An AI coding agent needs the right information at the right time—not every piece of information all the time. Keel uses a familiar mental model:
+An AI coding agent should be able to move from its task to the smallest relevant authoritative context without loading unrelated documentation first. Keel uses a familiar mental model:
 
 - A **sticky note** is the small set of instructions that should always be visible.
 - **Instruction manuals** are deeper references opened only when the task needs them.

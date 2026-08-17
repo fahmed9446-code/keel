@@ -124,6 +124,7 @@ test('upper README answers the beginner comprehension contract before technical 
     /No meaningful changes required/,
     /audit is read-only/i,
     /approve all, some, or none/i,
+    /task[^.]*smallest[^.]*authoritative context[^.]*without loading unrelated documentation/i,
     /Codex/i,
     /Claude Code/i,
     /Gemini CLI/i,
@@ -253,7 +254,7 @@ test('README keeps schema 3 evidence, scope, trust, and version claims consisten
   assert.ok(stateMatch, 'installation contract must contain a state example');
   const state = JSON.parse(stateMatch[1]);
 
-  assert.equal(manifest.version, '1.0.4');
+  assert.equal(manifest.version, '1.0.5');
   assert.equal(state.schemaVersion, 2);
   assert.equal(state.keelVersion, manifest.version);
   assert.match(readme, /scanner schema 3/i);

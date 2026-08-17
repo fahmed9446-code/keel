@@ -85,7 +85,9 @@ test('mechanically induced reading fixture contains a bounded explicit three-hop
 
   assert.ok(Buffer.byteLength(guidance) < 512);
   assert.match(guidance, /Before every task, read `docs\/startup\.md`/);
+  assert.match(startup, /read \[architecture\]\(architecture\.md\)/i);
   assert.match(startup, /Before a code task, read \[operating\]\(operating\.md\)/);
+  assert.match(startup, /read \[release guidance\]\(release\.md\)/i);
   assert.match(operating, /For the current repository check, read \[checks\]\(checks\.md\)/);
   assert.ok(Buffer.byteLength(startup) >= 4_096);
   assert.match(checks, /run the repository tests after code changes/i);
@@ -310,6 +312,10 @@ test('runner rejects missing, forbidden, over-cap, and incomplete observable out
     ['forbidden', 'solo-local-first-with-human-review', 'proposal type is forbidden add-ai-review'],
     ['too-many', 'clean-repository', 'proposed 1 packages; maximum is 0'],
     ['missing-communication', 'mechanically-induced-reading', 'must-do communication field is missing inducedReading'],
+    ['ungrounded-routing-facts', 'mechanically-induced-reading', 'required routing fact is missing unconditional-startup-read'],
+    ['placeholder-routing-communication', 'mechanically-induced-reading', 'communication evidence kind is missing unconditional-startup-read'],
+    ['mislinked-routing-communication', 'mechanically-induced-reading', 'communication evidence kind is missing unconditional-startup-read'],
+    ['missing-routing-rejection', 'mechanically-induced-reading', 'required deliberately rejected recommendation is missing add-graph-or-retrieval-system'],
   ];
   for (const [mode, scenario, message] of cases) {
     await t.test(mode, async () => {
