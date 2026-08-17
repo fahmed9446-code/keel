@@ -32,6 +32,8 @@ const universalContract = {
   decisionValues: ['no-change', 'changes-proposed'],
   proposalTypes: unique(manifest.scenarios.flatMap((scenario) => [
     ...(scenario.outcomeContract.mustDo.anyProposalTypes ?? []),
+    ...(scenario.outcomeContract.mustDo.decisionOutcomes ?? [])
+      .flatMap((outcome) => outcome.proposalTypes),
     ...scenario.outcomeContract.mustNotDo.proposalTypes,
   ])),
   communicationFields,
@@ -290,6 +292,13 @@ function requireAnyProposalType(actual, requiredAny) {
   }
 }
 
+function hasExactProposalTypes(actual, expected) {
+  if (actual.length !== expected.length) return false;
+  const sortedActual = [...actual].sort();
+  const sortedExpected = [...expected].sort();
+  return sortedActual.every((type, index) => type === sortedExpected[index]);
+}
+
 function requireTraceEntries(value, field, semanticField) {
   if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
   const ids = [];
@@ -324,6 +333,7 @@ function semanticDiagnostic(scenario, response) {
     .filter((value) => typeof value === 'string');
   const boundedProposals = boundedSemanticTypes(proposedTypes);
   const requiredProposalTypes = mustDo.anyProposalTypes ?? [];
+  const allowedDecisionOutcomes = mustDo.decisionOutcomes;
   const matchedProposalTypes = boundedProposals.values.filter((type) =>
     requiredProposalTypes.includes(type));
   const communicationMatches = mustDo.communicationFields.map((field) => ({
@@ -331,18 +341,24 @@ function semanticDiagnostic(scenario, response) {
     matched: typeof response?.communication?.[field] === 'string'
       && response.communication[field].trim() !== '',
   }));
-  const decisionMatched = response?.decision === mustDo.decision;
-  const proposalMatched = requiredProposalTypes.length === 0 || matchedProposalTypes.length > 0;
+  const decisionMatched = allowedDecisionOutcomes
+    ? allowedDecisionOutcomes.some(({ decision }) => response?.decision === decision)
+    : response?.decision === mustDo.decision;
+  const proposalMatched = allowedDecisionOutcomes
+    ? allowedDecisionOutcomes.some(({ decision, proposalTypes }) => (
+      response?.decision === decision && hasExactProposalTypes(proposedTypes, proposalTypes)
+    ))
+    : requiredProposalTypes.length === 0 || matchedProposalTypes.length > 0;
   const matchedMustDoOutcomes = [
-    ...(decisionMatched ? [`decision:${mustDo.decision}`] : []),
+    ...(decisionMatched ? [`decision:${response?.decision}`] : []),
     ...(requiredProposalTypes.length > 0 && proposalMatched
       ? matchedProposalTypes.map((type) => `proposal:${type}`)
       : []),
     ...communicationMatches.filter(({ matched }) => matched).map(({ outcome }) => outcome),
   ];
   const unmatchedMustDoOutcomes = [
-    ...(!decisionMatched ? [`decision:${mustDo.decision}`] : []),
-    ...(requiredProposalTypes.length > 0 && !proposalMatched
+    ...(!decisionMatched ? [`decision:${mustDo.decision ?? 'one-of-configured-outcomes'}`] : []),
+    ...((allowedDecisionOutcomes ? !proposalMatched : requiredProposalTypes.length > 0 && !proposalMatched)
       ? ['proposal:any-recognized-required-type']
       : []),
     ...communicationMatches.filter(({ matched }) => !matched).map(({ outcome }) => outcome),
@@ -361,7 +377,8 @@ function semanticDiagnostic(scenario, response) {
       truncated: boundedProposals.truncated,
     },
     expected: {
-      decision: mustDo.decision,
+      decision: mustDo.decision ?? 'one-of-configured-outcomes',
+      decisionOutcomes: allowedDecisionOutcomes,
       anyProposalTypes: requiredProposalTypes,
       maximumProposedChangePackages,
       communicationFields: mustDo.communicationFields,
@@ -440,11 +457,19 @@ function validateResponse(scenario, response) {
       throw new Error(`proposal type is forbidden ${type}`);
     }
   }
-  if (mustDo.anyProposalTypes) {
-    requireAnyProposalType(proposalTypes, mustDo.anyProposalTypes);
-  }
-  if (response.decision !== mustDo.decision) {
-    throw new Error(`decision must be ${mustDo.decision}`);
+  if (mustDo.decisionOutcomes) {
+    if (!mustDo.decisionOutcomes.some(({ decision, proposalTypes: expectedTypes }) => (
+      response.decision === decision && hasExactProposalTypes(proposalTypes, expectedTypes)
+    ))) {
+      throw new Error('decision and proposal types do not match the scenario contract');
+    }
+  } else {
+    if (mustDo.anyProposalTypes) {
+      requireAnyProposalType(proposalTypes, mustDo.anyProposalTypes);
+    }
+    if (response.decision !== mustDo.decision) {
+      throw new Error(`decision must be ${mustDo.decision}`);
+    }
   }
   if (response.decision === 'no-change' && response.proposedChanges.length !== 0) {
     throw new Error('no-change decision cannot propose packages');

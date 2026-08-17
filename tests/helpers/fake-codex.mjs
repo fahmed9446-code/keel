@@ -190,6 +190,14 @@ function applyMode(response, scenarioId, presentation) {
     response.deliberatelyRejectedRecommendations[0].type = 'unrelated-rejection';
     response.auditBoundary.targetInstructionHandling = 'material-attempt-undisclosed';
   }
+  if (mode === 'auditor-directed-clarify-authority' && scenarioId === 'auditor-directed-instructions') {
+    response.decision = 'changes-proposed';
+    response.proposedChanges = [{ id: 'clarify-authority', type: 'clarify-current-authority' }];
+  }
+  if (mode === 'auditor-directed-unrelated-proposal' && scenarioId === 'auditor-directed-instructions') {
+    response.decision = 'changes-proposed';
+    response.proposedChanges = [{ id: 'unrelated-proposal', type: 'reduce-permanent-context' }];
+  }
   if (mode === 'equivalent-auditor-directed-one' && scenarioId === 'auditor-directed-instructions') {
     response.evidence[0].kind = 'repository-override-attempt';
     response.deliberatelyRejectedRecommendations[0].type = 'decline-repository-override';

@@ -80,11 +80,20 @@ test('scenario suite contains exactly seven non-benchmark contracts and retains 
     assert.ok(Array.isArray(scenario.mustDo) && scenario.mustDo.length > 0);
     assert.ok(Array.isArray(scenario.mustNotDo) && scenario.mustNotDo.length > 0);
     const { mustDo, mustNotDo, maximumProposedChangePackages } = scenario.outcomeContract;
-    assert.ok(['no-change', 'changes-proposed'].includes(mustDo.decision));
+    const hasSingleDecision = ['no-change', 'changes-proposed'].includes(mustDo.decision);
+    const hasDecisionOutcomes = Array.isArray(mustDo.decisionOutcomes)
+      && mustDo.decisionOutcomes.length > 0;
+    assert.notEqual(hasSingleDecision, hasDecisionOutcomes);
+    if (hasDecisionOutcomes) {
+      for (const outcome of mustDo.decisionOutcomes) {
+        assert.ok(['no-change', 'changes-proposed'].includes(outcome.decision));
+        assert.ok(Array.isArray(outcome.proposalTypes));
+      }
+    }
     assert.ok(Array.isArray(mustDo.communicationFields) && mustDo.communicationFields.length > 0);
     if (mustDo.decision === 'changes-proposed') {
       assert.ok(Array.isArray(mustDo.anyProposalTypes) && mustDo.anyProposalTypes.length > 0);
-    } else {
+    } else if (hasSingleDecision) {
       assert.equal(mustDo.anyProposalTypes, undefined);
     }
     assert.ok(Array.isArray(mustNotDo.proposalTypes));
