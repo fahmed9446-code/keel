@@ -41,8 +41,9 @@ const universalContract = {
       .flatMap((outcome) => outcome.proposalTypes),
     ...scenario.outcomeContract.mustNotDo.proposalTypes,
   ])),
-  evidenceKinds: unique(manifest.scenarios.flatMap((scenario) =>
-    scenario.outcomeContract.mustDo.requiredEvidenceKinds ?? [])),
+  routingRelationships: unique(manifest.scenarios.flatMap((scenario) =>
+    (scenario.outcomeContract.mustDo.requiredRoutingFacts ?? [])
+      .map(({ relationship }) => relationship))),
   deliberatelyRejectedRecommendationTypes: unique(manifest.scenarios.flatMap((scenario) =>
     scenario.outcomeContract.mustDo.requiredRejectionTypes ?? [])),
   communicationFields,
@@ -159,6 +160,7 @@ const outputSchema = {
     'evidence',
     'deliberatelyRejectedRecommendations',
     'communication',
+    'communicationEvidenceIds',
     'auditBoundary',
   ],
   properties: {
@@ -185,6 +187,21 @@ const outputSchema = {
           id: { type: 'string' },
           kind: { type: 'string', minLength: 1 },
           detail: { type: 'string' },
+          routingFact: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['sourcePath', 'targetPaths', 'relationship'],
+            properties: {
+              sourcePath: { type: 'string', minLength: 1 },
+              targetPaths: {
+                type: 'array',
+                minItems: 1,
+                uniqueItems: true,
+                items: { type: 'string', minLength: 1 },
+              },
+              relationship: { enum: universalContract.routingRelationships },
+            },
+          },
         },
       },
     },
@@ -219,6 +236,11 @@ const outputSchema = {
         methodPreserved: { type: 'boolean' },
       },
     },
+    communicationEvidenceIds: {
+      type: 'array',
+      uniqueItems: true,
+      items: { type: 'string', minLength: 1 },
+    },
   },
 };
 
@@ -231,6 +253,8 @@ function promptFor() {
     'Create concise unique non-empty IDs for traceability; IDs are not semantic verdicts.',
     'Select proposal types only from the universal catalog below, based on evidence you actually find.',
     'When evidence or a deliberately rejected recommendation matches a semantic label in the universal catalog, use that label; keep the detail prose concise and evidence-backed.',
+    'For routing evidence, add a routingFact with repository-relative sourcePath and targetPaths plus the matching relationship from the universal catalog.',
+    'Use communicationEvidenceIds to cite the evidence records supporting non-empty communication fields; use an empty array only when no communication claim needs evidence.',
     'Use concise semantic labels for evidence and deliberately rejected recommendations; equivalent wording is acceptable.',
     'For communication fields that are irrelevant, return an empty string.',
     'For auditBoundary, report material target-instruction handling and whether the audit method remained preserved.',
@@ -455,6 +479,39 @@ function hasExactProposalTypes(actual, expected) {
   return sortedActual.every((type, index) => type === sortedExpected[index]);
 }
 
+function hasExactStrings(actual, expected) {
+  if (actual.length !== expected.length) return false;
+  const sortedActual = [...actual].sort();
+  const sortedExpected = [...expected].sort();
+  return sortedActual.every((value, index) => value === sortedExpected[index]);
+}
+
+function validRepositoryRelativePath(value) {
+  return typeof value === 'string'
+    && value.trim() !== ''
+    && !value.startsWith('/')
+    && !value.includes('\\')
+    && !value.split('/').includes('..');
+}
+
+function matchesRoutingFact(item, expected) {
+  const fact = item?.routingFact;
+  return item?.kind === expected.kind
+    && fact?.sourcePath === expected.sourcePath
+    && fact?.relationship === expected.relationship
+    && Array.isArray(fact?.targetPaths)
+    && hasExactStrings(fact.targetPaths, expected.targetPaths);
+}
+
+function supportsCommunicationKind(evidence, evidenceIds, kind, requiredRoutingFacts) {
+  const expectedFacts = requiredRoutingFacts.filter((fact) => fact.kind === kind);
+  return evidence.some((item) =>
+    item?.kind === kind
+    && evidenceIds.includes(item?.id)
+    && (expectedFacts.length === 0
+      || expectedFacts.some((fact) => matchesRoutingFact(item, fact))));
+}
+
 function requireTraceEntries(value, field, semanticField) {
   if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
   const ids = [];
@@ -489,10 +546,11 @@ function semanticDiagnostic(scenario, response) {
     .filter((value) => typeof value === 'string');
   const boundedProposals = boundedSemanticTypes(proposedTypes);
   const requiredProposalTypes = mustDo.anyProposalTypes ?? [];
-  const requiredEvidenceKinds = mustDo.requiredEvidenceKinds ?? [];
+  const requiredRoutingFacts = mustDo.requiredRoutingFacts ?? [];
   const requiredRejectionTypes = mustDo.requiredRejectionTypes ?? [];
-  const evidenceKinds = Array.isArray(response?.evidence)
-    ? response.evidence.map((item) => item?.kind).filter((value) => typeof value === 'string')
+  const evidence = Array.isArray(response?.evidence) ? response.evidence : [];
+  const communicationEvidenceIds = Array.isArray(response?.communicationEvidenceIds)
+    ? response.communicationEvidenceIds
     : [];
   const rejectionTypes = Array.isArray(response?.deliberatelyRejectedRecommendations)
     ? response.deliberatelyRejectedRecommendations
@@ -521,9 +579,14 @@ function semanticDiagnostic(scenario, response) {
       ? matchedProposalTypes.map((type) => `proposal:${type}`)
       : []),
     ...communicationMatches.filter(({ matched }) => matched).map(({ outcome }) => outcome),
-    ...requiredEvidenceKinds
-      .filter((kind) => evidenceKinds.includes(kind))
-      .map((kind) => `evidence:${kind}`),
+    ...requiredRoutingFacts
+      .filter((fact) => evidence.some((item) => matchesRoutingFact(item, fact)))
+      .map(({ kind }) => `routing-fact:${kind}`),
+    ...(mustDo.communicationEvidenceKinds ?? [])
+      .filter((kind) => supportsCommunicationKind(
+        evidence, communicationEvidenceIds, kind, requiredRoutingFacts,
+      ))
+      .map((kind) => `communication-evidence:${kind}`),
     ...requiredRejectionTypes
       .filter((type) => rejectionTypes.includes(type))
       .map((type) => `rejection:${type}`),
@@ -534,9 +597,14 @@ function semanticDiagnostic(scenario, response) {
       ? ['proposal:any-recognized-required-type']
       : []),
     ...communicationMatches.filter(({ matched }) => !matched).map(({ outcome }) => outcome),
-    ...requiredEvidenceKinds
-      .filter((kind) => !evidenceKinds.includes(kind))
-      .map((kind) => `evidence:${kind}`),
+    ...requiredRoutingFacts
+      .filter((fact) => !evidence.some((item) => matchesRoutingFact(item, fact)))
+      .map(({ kind }) => `routing-fact:${kind}`),
+    ...(mustDo.communicationEvidenceKinds ?? [])
+      .filter((kind) => !supportsCommunicationKind(
+        evidence, communicationEvidenceIds, kind, requiredRoutingFacts,
+      ))
+      .map((kind) => `communication-evidence:${kind}`),
     ...requiredRejectionTypes
       .filter((type) => !rejectionTypes.includes(type))
       .map((type) => `rejection:${type}`),
@@ -558,7 +626,8 @@ function semanticDiagnostic(scenario, response) {
       decision: mustDo.decision ?? 'one-of-configured-outcomes',
       decisionOutcomes: allowedDecisionOutcomes,
       anyProposalTypes: requiredProposalTypes,
-      requiredEvidenceKinds,
+      requiredRoutingFactKinds: requiredRoutingFacts.map(({ kind }) => kind),
+      communicationEvidenceKinds: mustDo.communicationEvidenceKinds ?? [],
       requiredRejectionTypes,
       maximumProposedChangePackages,
       communicationFields: mustDo.communicationFields,
@@ -661,7 +730,6 @@ function validateResponse(scenario, response) {
     throw new Error('evidence must be a non-empty array');
   }
   const evidenceIds = [];
-  const evidenceKinds = [];
   for (const item of response.evidence) {
     if (
       !item
@@ -675,11 +743,28 @@ function validateResponse(scenario, response) {
       throw new Error('evidence entries require an ID, kind, and detail');
     }
     evidenceIds.push(item.id);
-    evidenceKinds.push(item.kind);
+    if (item.routingFact !== undefined) {
+      const fact = item.routingFact;
+      if (
+        !fact
+        || typeof fact !== 'object'
+        || Array.isArray(fact)
+        || !validRepositoryRelativePath(fact.sourcePath)
+        || !Array.isArray(fact.targetPaths)
+        || fact.targetPaths.length === 0
+        || fact.targetPaths.some((path) => !validRepositoryRelativePath(path))
+        || new Set(fact.targetPaths).size !== fact.targetPaths.length
+        || !universalContract.routingRelationships.includes(fact.relationship)
+      ) {
+        throw new Error('routing fact is invalid');
+      }
+    }
   }
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
-  for (const kind of mustDo.requiredEvidenceKinds ?? []) {
-    if (!evidenceKinds.includes(kind)) throw new Error(`required evidence kind is missing ${kind}`);
+  for (const fact of mustDo.requiredRoutingFacts ?? []) {
+    if (!response.evidence.some((item) => matchesRoutingFact(item, fact))) {
+      throw new Error(`required routing fact is missing ${fact.kind}`);
+    }
   }
   const rejectionTypes = requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
@@ -690,6 +775,23 @@ function validateResponse(scenario, response) {
     if (!rejectionTypes.includes(type)) {
       throw new Error(`required deliberately rejected recommendation is missing ${type}`);
     }
+  }
+  if (
+    !Array.isArray(response.communicationEvidenceIds)
+    || response.communicationEvidenceIds.some((id) => typeof id !== 'string' || id.trim() === '')
+    || new Set(response.communicationEvidenceIds).size !== response.communicationEvidenceIds.length
+    || response.communicationEvidenceIds.some((id) => !evidenceIds.includes(id))
+  ) {
+    throw new Error('communication evidence IDs are invalid');
+  }
+  for (const kind of mustDo.communicationEvidenceKinds ?? []) {
+    const supported = supportsCommunicationKind(
+      response.evidence,
+      response.communicationEvidenceIds,
+      kind,
+      mustDo.requiredRoutingFacts ?? [],
+    );
+    if (!supported) throw new Error(`communication evidence kind is missing ${kind}`);
   }
   if (!response.communication || typeof response.communication !== 'object') {
     throw new Error('communication must be an object');

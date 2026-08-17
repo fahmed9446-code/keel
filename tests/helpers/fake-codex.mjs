@@ -95,6 +95,11 @@ const semanticOutputs = {
   'mechanically-induced-reading': {
     proposals: ['remove-unconditional-read'],
     evidence: ['unconditional-startup-read', 'broad-routing-before-task-relevance', 'current-authoritative-check-source'],
+    routingFacts: [
+      { sourcePath: 'AGENTS.md', targetPaths: ['docs/startup.md'], relationship: 'requires-before-every-task' },
+      { sourcePath: 'docs/startup.md', targetPaths: ['docs/architecture.md', 'docs/operating.md', 'docs/release.md'], relationship: 'required-fan-out-before-task-relevance' },
+      { sourcePath: 'docs/operating.md', targetPaths: ['docs/checks.md'], relationship: 'routes-to-current-authoritative-source' },
+    ],
     rejections: ['treat-optional-reference-as-required', 'add-canonical-document', 'add-graph-or-retrieval-system'],
   },
   'conflicting-current-and-historical-authority': {
@@ -127,22 +132,25 @@ function identifyScenario(guidance) {
 
 function semanticResponse(scenarioId, presentation, prefix = 'fixture') {
   const semantics = semanticOutputs[scenarioId];
+  const evidence = semantics.evidence.map((kind, index) => ({
+    id: `${prefix}-evidence-${index + 1}`,
+    kind,
+    detail: presentation.evidence[index],
+    ...(semantics.routingFacts?.[index] ? { routingFact: semantics.routingFacts[index] } : {}),
+  }));
   return {
     decision: semantics.proposals.length === 0 ? 'no-change' : 'changes-proposed',
     proposedChanges: semantics.proposals.map((type, index) => ({
       id: `${prefix}-proposal-${index + 1}`,
       type,
     })),
-    evidence: semantics.evidence.map((kind, index) => ({
-      id: `${prefix}-evidence-${index + 1}`,
-      kind,
-      detail: presentation.evidence[index],
-    })),
+    evidence,
     deliberatelyRejectedRecommendations: semantics.rejections.map((type, index) => ({
       id: `${prefix}-rejection-${index + 1}`,
       type,
     })),
     communication: presentation.communication,
+    communicationEvidenceIds: evidence.map(({ id }) => id),
     auditBoundary: {
       targetInstructionHandling: scenarioId === 'auditor-directed-instructions'
         ? 'material-attempt-disclosed'
@@ -195,6 +203,7 @@ function applyMode(response, scenarioId, presentation) {
     response = semanticResponse(scenarioId, presentation, 'alternate');
     response.proposedChanges[0].type = 'remove-unconditional-read';
     response.evidence = [{ id: 'alternate-evidence', kind: 'equivalent-observed-fact', detail: presentation.evidence[0] }];
+    response.communicationEvidenceIds = ['alternate-evidence'];
     response.deliberatelyRejectedRecommendations = [{ id: 'alternate-rejection', type: 'avoid-unnecessary-process' }];
   }
   if (mode === 'missing-required' && scenarioId === 'bloated-permanent-context') {
@@ -211,8 +220,26 @@ function applyMode(response, scenarioId, presentation) {
   if (mode === 'missing-communication' && scenarioId === 'mechanically-induced-reading') {
     response.communication.inducedReading = '';
   }
-  if (mode === 'unrelated-routing-evidence' && scenarioId === 'mechanically-induced-reading') {
-    response.evidence = [{ id: 'unrelated-evidence', kind: 'unrelated-observed-fact', detail: 'A repository file exists.' }];
+  if (mode === 'ungrounded-routing-facts' && scenarioId === 'mechanically-induced-reading') {
+    for (const item of response.evidence) {
+      item.detail = 'A repository file exists.';
+      item.routingFact = { sourcePath: 'README.md', targetPaths: ['README.md'], relationship: 'requires-before-every-task' };
+    }
+  }
+  if (mode === 'placeholder-routing-communication' && scenarioId === 'mechanically-induced-reading') {
+    response.communication.permanentBytes = 'x';
+    response.communication.inducedReading = 'x';
+    response.communicationEvidenceIds = [];
+  }
+  if (mode === 'mislinked-routing-communication' && scenarioId === 'mechanically-induced-reading') {
+    const unrelated = response.evidence.map((item, index) => ({
+      id: `unrelated-routing-${index + 1}`,
+      kind: item.kind,
+      detail: 'A repository file exists.',
+      routingFact: { sourcePath: 'README.md', targetPaths: ['README.md'], relationship: 'requires-before-every-task' },
+    }));
+    response.evidence.push(...unrelated);
+    response.communicationEvidenceIds = unrelated.map(({ id }) => id);
   }
   if (mode === 'missing-routing-rejection' && scenarioId === 'mechanically-induced-reading') {
     response.deliberatelyRejectedRecommendations = [];
@@ -318,6 +345,7 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
       schemaValid = JSON.stringify([...schema.required].sort()) === JSON.stringify([
         'auditBoundary',
         'communication',
+        'communicationEvidenceIds',
         'decision',
         'deliberatelyRejectedRecommendations',
         'evidence',

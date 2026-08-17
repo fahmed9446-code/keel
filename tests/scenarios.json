@@ -61,7 +61,12 @@
         "mustDo": {
           "decision": "changes-proposed",
           "anyProposalTypes": ["remove-unconditional-read", "reduce-permanent-context"],
-          "requiredEvidenceKinds": ["unconditional-startup-read", "broad-routing-before-task-relevance", "current-authoritative-check-source"],
+          "requiredRoutingFacts": [
+            {"kind": "unconditional-startup-read", "sourcePath": "AGENTS.md", "targetPaths": ["docs/startup.md"], "relationship": "requires-before-every-task"},
+            {"kind": "broad-routing-before-task-relevance", "sourcePath": "docs/startup.md", "targetPaths": ["docs/architecture.md", "docs/operating.md", "docs/release.md"], "relationship": "required-fan-out-before-task-relevance"},
+            {"kind": "current-authoritative-check-source", "sourcePath": "docs/operating.md", "targetPaths": ["docs/checks.md"], "relationship": "routes-to-current-authoritative-source"}
+          ],
+          "communicationEvidenceKinds": ["unconditional-startup-read", "broad-routing-before-task-relevance", "current-authoritative-check-source"],
           "requiredRejectionTypes": ["add-graph-or-retrieval-system"],
           "communicationFields": ["permanentBytes", "inducedReading"]
         },
