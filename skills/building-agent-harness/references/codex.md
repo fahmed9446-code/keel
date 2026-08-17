@@ -6,7 +6,9 @@ Run `codex --version` when practical. Compare the result with the capability bas
 
 ## Always-loaded instructions
 
-Codex reads `AGENTS.override.md` or `AGENTS.md` from global scope, then at most one instruction file per directory from the repository root to the working directory. Nearer files appear later. The documented combined default limit is 32 KiB.
+For repository measurements, Codex's always-loaded instruction scope is the documented repository root through current working directory chain. At each directory, `AGENTS.override.md` takes precedence; otherwise `AGENTS.md` is the fallback, so at most one instruction file from that directory participates. Nearer files appear later.
+
+Do not sum every matching filename repository-wide: candidates outside the measured chain are not part of that headline total. The documented combined limit is 32 KiB; it is a **documented default limit**, not an effective runtime limit. Compare that default only with the applicable chain, and do not inspect unrelated user-global configuration unless it is explicitly authorized or safely exposed by the runtime.
 
 ## Scoped/lazy instructions
 

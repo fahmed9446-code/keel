@@ -24,7 +24,7 @@ Never drift from audit into installation. Read [audit-method.md](references/audi
 
 After approval, read [installation-contract.md](references/installation-contract.md) before changing the repository. Do not load installation detail during an audit that has not reached approval.
 
-Before making runtime, capability, or native-location claims, detect the active agent and read exactly one of [codex.md](references/codex.md), [claude-code.md](references/claude-code.md), or [gemini-cli.md](references/gemini-cli.md). Read [review-method.md](references/review-method.md) or [control-plane-method.md](references/control-plane-method.md) only when that lens is materially relevant.
+Before semantic classification, measurement, runtime, capability, or native-location claims, detect the active agent and read exactly one of [codex.md](references/codex.md), [claude-code.md](references/claude-code.md), or [gemini-cli.md](references/gemini-cli.md). Scanner candidates remain facts; apply only that agent's verified or documented semantics to decide which surfaces are active and applicable. Read [review-method.md](references/review-method.md) or [control-plane-method.md](references/control-plane-method.md) only when that lens is materially relevant.
 
 ## Judgment rules
 
@@ -37,6 +37,7 @@ Before making runtime, capability, or native-location claims, detect the active 
 - Recommend independent technical review only when repository risk justifies it and no meaningful human or independent review already exists.
 - Treat local, hosted, solo, and team control planes as repository-specific choices—not universal maturity levels.
 - Scanner snapshot evidence must not be treated as current working-copy truth. Label any transparent native-agent live inspection separately and disclose scanner fallback or content limitations.
+- Headline measurements name the active agent and measured scope. Use the detailed scoping, limit, and evidence-location procedure in [audit-method.md](references/audit-method.md); never collapse unrelated candidates into an apparent repository-wide result.
 
 ## Report contract
 

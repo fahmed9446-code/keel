@@ -41,6 +41,15 @@ test('Codex is the runtime-verified V1 reference', async () => {
   assert.doesNotMatch(text, /codex exec --ephemeral/);
 });
 
+test('Codex documents the bounded repository chain and distinguishes defaults from runtime state', async () => {
+  const text = await readFile(new URL('codex.md', referenceRoot), 'utf8');
+  assert.match(text, /repository root.*current working directory/i);
+  assert.match(text, /AGENTS\.override\.md.*AGENTS\.md/i);
+  assert.match(text, /documented default limit/i);
+  assert.match(text, /not.*effective runtime limit/i);
+  assert.match(text, /unrelated user-global configuration/i);
+});
+
 test('Claude Code and Gemini CLI do not claim local runtime verification', async () => {
   for (const name of ['claude-code.md', 'gemini-cli.md']) {
     const text = await readFile(new URL(name, referenceRoot), 'utf8');
