@@ -61,6 +61,8 @@
         "mustDo": {
           "decision": "changes-proposed",
           "anyProposalTypes": ["remove-unconditional-read", "reduce-permanent-context"],
+          "requiredEvidenceKinds": ["unconditional-startup-read", "broad-routing-before-task-relevance", "current-authoritative-check-source"],
+          "requiredRejectionTypes": ["add-graph-or-retrieval-system"],
           "communicationFields": ["permanentBytes", "inducedReading"]
         },
         "mustNotDo": {"proposalTypes": ["treat-optional-reference-as-required", "add-canonical-document", "add-graph-or-retrieval-system"]},

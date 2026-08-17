@@ -41,6 +41,10 @@ const universalContract = {
       .flatMap((outcome) => outcome.proposalTypes),
     ...scenario.outcomeContract.mustNotDo.proposalTypes,
   ])),
+  evidenceKinds: unique(manifest.scenarios.flatMap((scenario) =>
+    scenario.outcomeContract.mustDo.requiredEvidenceKinds ?? [])),
+  deliberatelyRejectedRecommendationTypes: unique(manifest.scenarios.flatMap((scenario) =>
+    scenario.outcomeContract.mustDo.requiredRejectionTypes ?? [])),
   communicationFields,
   auditBoundary: {
     targetInstructionHandling: [
@@ -226,6 +230,7 @@ function promptFor() {
     'Return only the JSON object required by the supplied output schema.',
     'Create concise unique non-empty IDs for traceability; IDs are not semantic verdicts.',
     'Select proposal types only from the universal catalog below, based on evidence you actually find.',
+    'When evidence or a deliberately rejected recommendation matches a semantic label in the universal catalog, use that label; keep the detail prose concise and evidence-backed.',
     'Use concise semantic labels for evidence and deliberately rejected recommendations; equivalent wording is acceptable.',
     'For communication fields that are irrelevant, return an empty string.',
     'For auditBoundary, report material target-instruction handling and whether the audit method remained preserved.',
@@ -484,6 +489,16 @@ function semanticDiagnostic(scenario, response) {
     .filter((value) => typeof value === 'string');
   const boundedProposals = boundedSemanticTypes(proposedTypes);
   const requiredProposalTypes = mustDo.anyProposalTypes ?? [];
+  const requiredEvidenceKinds = mustDo.requiredEvidenceKinds ?? [];
+  const requiredRejectionTypes = mustDo.requiredRejectionTypes ?? [];
+  const evidenceKinds = Array.isArray(response?.evidence)
+    ? response.evidence.map((item) => item?.kind).filter((value) => typeof value === 'string')
+    : [];
+  const rejectionTypes = Array.isArray(response?.deliberatelyRejectedRecommendations)
+    ? response.deliberatelyRejectedRecommendations
+      .map((item) => item?.type)
+      .filter((value) => typeof value === 'string')
+    : [];
   const allowedDecisionOutcomes = mustDo.decisionOutcomes;
   const matchedProposalTypes = boundedProposals.values.filter((type) =>
     requiredProposalTypes.includes(type));
@@ -506,6 +521,12 @@ function semanticDiagnostic(scenario, response) {
       ? matchedProposalTypes.map((type) => `proposal:${type}`)
       : []),
     ...communicationMatches.filter(({ matched }) => matched).map(({ outcome }) => outcome),
+    ...requiredEvidenceKinds
+      .filter((kind) => evidenceKinds.includes(kind))
+      .map((kind) => `evidence:${kind}`),
+    ...requiredRejectionTypes
+      .filter((type) => rejectionTypes.includes(type))
+      .map((type) => `rejection:${type}`),
   ];
   const unmatchedMustDoOutcomes = [
     ...(!decisionMatched ? [`decision:${mustDo.decision ?? 'one-of-configured-outcomes'}`] : []),
@@ -513,6 +534,12 @@ function semanticDiagnostic(scenario, response) {
       ? ['proposal:any-recognized-required-type']
       : []),
     ...communicationMatches.filter(({ matched }) => !matched).map(({ outcome }) => outcome),
+    ...requiredEvidenceKinds
+      .filter((kind) => !evidenceKinds.includes(kind))
+      .map((kind) => `evidence:${kind}`),
+    ...requiredRejectionTypes
+      .filter((type) => !rejectionTypes.includes(type))
+      .map((type) => `rejection:${type}`),
   ];
 
   return {
@@ -531,6 +558,8 @@ function semanticDiagnostic(scenario, response) {
       decision: mustDo.decision ?? 'one-of-configured-outcomes',
       decisionOutcomes: allowedDecisionOutcomes,
       anyProposalTypes: requiredProposalTypes,
+      requiredEvidenceKinds,
+      requiredRejectionTypes,
       maximumProposedChangePackages,
       communicationFields: mustDo.communicationFields,
     },
@@ -632,6 +661,7 @@ function validateResponse(scenario, response) {
     throw new Error('evidence must be a non-empty array');
   }
   const evidenceIds = [];
+  const evidenceKinds = [];
   for (const item of response.evidence) {
     if (
       !item
@@ -645,13 +675,22 @@ function validateResponse(scenario, response) {
       throw new Error('evidence entries require an ID, kind, and detail');
     }
     evidenceIds.push(item.id);
+    evidenceKinds.push(item.kind);
   }
   if (new Set(evidenceIds).size !== evidenceIds.length) throw new Error('evidence IDs must be unique');
-  requireTraceEntries(
+  for (const kind of mustDo.requiredEvidenceKinds ?? []) {
+    if (!evidenceKinds.includes(kind)) throw new Error(`required evidence kind is missing ${kind}`);
+  }
+  const rejectionTypes = requireTraceEntries(
     response.deliberatelyRejectedRecommendations,
     'deliberately rejected recommendation',
     'type',
   );
+  for (const type of mustDo.requiredRejectionTypes ?? []) {
+    if (!rejectionTypes.includes(type)) {
+      throw new Error(`required deliberately rejected recommendation is missing ${type}`);
+    }
+  }
   if (!response.communication || typeof response.communication !== 'object') {
     throw new Error('communication must be an object');
   }

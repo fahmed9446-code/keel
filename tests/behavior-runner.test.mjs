@@ -312,6 +312,8 @@ test('runner rejects missing, forbidden, over-cap, and incomplete observable out
     ['forbidden', 'solo-local-first-with-human-review', 'proposal type is forbidden add-ai-review'],
     ['too-many', 'clean-repository', 'proposed 1 packages; maximum is 0'],
     ['missing-communication', 'mechanically-induced-reading', 'must-do communication field is missing inducedReading'],
+    ['unrelated-routing-evidence', 'mechanically-induced-reading', 'required evidence kind is missing unconditional-startup-read'],
+    ['missing-routing-rejection', 'mechanically-induced-reading', 'required deliberately rejected recommendation is missing add-graph-or-retrieval-system'],
   ];
   for (const [mode, scenario, message] of cases) {
     await t.test(mode, async () => {

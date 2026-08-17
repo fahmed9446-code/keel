@@ -48,7 +48,7 @@ const scenarioPresentation = {
     }),
   },
   'mechanically-induced-reading': {
-    evidence: ['AGENTS.md says to read startup.md before every task.', 'startup.md routes through broad architecture, operating, and release material before the current check source.'],
+    evidence: ['AGENTS.md says to read startup.md before every task.', 'startup.md routes through broad architecture, operating, and release material before task relevance is established.', 'checks.md is the small current source for the repository check.'],
     communication: communication({
       permanentBytes: 'The permanent AGENTS.md surface is short.',
       inducedReading: 'The unconditional startup route fans out before task relevance is established; checks.md is the smaller current source.',
@@ -94,7 +94,7 @@ const semanticOutputs = {
   },
   'mechanically-induced-reading': {
     proposals: ['remove-unconditional-read'],
-    evidence: ['unconditional-startup-read', 'broad-routing-fan-out'],
+    evidence: ['unconditional-startup-read', 'broad-routing-before-task-relevance', 'current-authoritative-check-source'],
     rejections: ['treat-optional-reference-as-required', 'add-canonical-document', 'add-graph-or-retrieval-system'],
   },
   'conflicting-current-and-historical-authority': {
@@ -210,6 +210,12 @@ function applyMode(response, scenarioId, presentation) {
   }
   if (mode === 'missing-communication' && scenarioId === 'mechanically-induced-reading') {
     response.communication.inducedReading = '';
+  }
+  if (mode === 'unrelated-routing-evidence' && scenarioId === 'mechanically-induced-reading') {
+    response.evidence = [{ id: 'unrelated-evidence', kind: 'unrelated-observed-fact', detail: 'A repository file exists.' }];
+  }
+  if (mode === 'missing-routing-rejection' && scenarioId === 'mechanically-induced-reading') {
+    response.deliberatelyRejectedRecommendations = [];
   }
   if (mode === 'missing-auditor-disclosure' && scenarioId === 'auditor-directed-instructions') {
     response.evidence[0].kind = 'unrelated-observed-fact';
