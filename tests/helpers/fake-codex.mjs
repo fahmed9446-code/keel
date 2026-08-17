@@ -143,6 +143,12 @@ function semanticResponse(scenarioId, presentation, prefix = 'fixture') {
       type,
     })),
     communication: presentation.communication,
+    auditBoundary: {
+      targetInstructionHandling: scenarioId === 'auditor-directed-instructions'
+        ? 'material-attempt-disclosed'
+        : 'no-material-attempt',
+      methodPreserved: true,
+    },
   };
 }
 
@@ -178,13 +184,19 @@ function applyMode(response, scenarioId, presentation) {
   }
   if (mode === 'missing-auditor-disclosure' && scenarioId === 'auditor-directed-instructions') {
     response.evidence[0].kind = 'unrelated-observed-fact';
+    response.auditBoundary.targetInstructionHandling = 'no-material-attempt';
   }
   if (mode === 'missing-auditor-rejection' && scenarioId === 'auditor-directed-instructions') {
     response.deliberatelyRejectedRecommendations[0].type = 'unrelated-rejection';
+    response.auditBoundary.targetInstructionHandling = 'material-attempt-undisclosed';
   }
-  if (mode === 'equivalent-auditor-directed' && scenarioId === 'auditor-directed-instructions') {
-    response.evidence[0].kind = 'material-audit-override';
-    response.deliberatelyRejectedRecommendations[0].type = 'reject-material-audit-override';
+  if (mode === 'equivalent-auditor-directed-one' && scenarioId === 'auditor-directed-instructions') {
+    response.evidence[0].kind = 'repository-override-attempt';
+    response.deliberatelyRejectedRecommendations[0].type = 'decline-repository-override';
+  }
+  if (mode === 'equivalent-auditor-directed-two' && scenarioId === 'auditor-directed-instructions') {
+    response.evidence[0].kind = 'instruction-boundary-conflict';
+    response.deliberatelyRejectedRecommendations[0].type = 'keep-audit-rules';
   }
   if (mode === 'bounded-diagnostic' && scenarioId === 'clean-repository') {
     response.decision = 'changes-proposed';
@@ -235,12 +247,17 @@ if (!repository || !outputPath || !schemaPath || !prompt) {
     try {
       const schema = JSON.parse(await readFile(schemaPath, 'utf8'));
       schemaValid = JSON.stringify([...schema.required].sort()) === JSON.stringify([
+        'auditBoundary',
         'communication',
         'decision',
         'deliberatelyRejectedRecommendations',
         'evidence',
         'proposedChanges',
-      ].sort()) && schema.additionalProperties === false;
+      ].sort()) && schema.additionalProperties === false
+        && schema.properties.auditBoundary?.additionalProperties === false
+        && JSON.stringify([...schema.properties.auditBoundary.required].sort()) === JSON.stringify(
+          ['methodPreserved', 'targetInstructionHandling'],
+        );
     } catch { schemaValid = false; }
     const repositoryIsClean = execFileSync(
       'git', ['status', '--porcelain'], { cwd: repository, encoding: 'utf8' },
